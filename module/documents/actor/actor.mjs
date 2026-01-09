@@ -1,0 +1,3687 @@
+import CreateDocumentDialog from "../../applications/create-document-dialog.mjs";
+import SkillToolRollConfigurationDialog from "../../applications/dice/skill-tool-configuration-dialog.mjs";
+import PropertyAttribution from "../../applications/property-attribution.mjs";
+import TravelField from "../../data/actor/fields/travel-field.mjs";
+import ActivationsField from "../../data/chat-message/fields/activations-field.mjs";
+import { ActorDeltasField } from "../../data/chat-message/fields/deltas-field.mjs";
+import AdvantageModeField from "../../data/fields/advantage-mode-field.mjs";
+import TransformationSetting from "../../data/settings/transformation-setting.mjs";
+import { createRollLabel } from "../../enrichers.mjs";
+import {
+  convertTime, defaultUnits, formatLength, formatNumber, formatTime, simplifyBonus, staticID
+} from "../../utils.mjs";
+import ActiveEffectNaheulbeuk from "../active-effect.mjs";
+import ItemNaheulbeuk from "../item.mjs";
+import SystemDocumentMixin from "../mixins/document.mjs";
+import Proficiency from "./proficiency.mjs";
+import SelectChoices from "./select-choices.mjs";
+import * as Trait from "./trait.mjs";
+
+/**
+ * @import { RequestOptionsNaheulbeuk } from "../../_types.mjs";
+ * @import { AttributionDescription } from "../../applications/_types.mjs";
+ * @import { TravelPaceNaheulbeuk } from "../../data/actor/fields/_types.mjs";
+ * @import { SkillData } from "../../data/actor/templates/_types.mjs";
+ * @import {
+ *   AbilityRollProcessConfiguration,
+ *   BasicRollDialogConfiguration, BasicRollMessageConfiguration,
+ *   HitDieRollProcessConfiguration, InitiativeRollOptions,
+ *   SkillToolRollDialogConfiguration, SkillToolRollProcessConfiguration
+ * } from "../../dice/_types.mjs";
+ * @import {
+ *   DamageApplicationOptions, DamageDescription, DamageSummary, RestConfiguration, RestResult, SpellcastingDescription
+ * } from "../_types.mjs";
+ */
+
+/**
+ * Extend the base Actor class to implement additional system-specific logic.
+ */
+export default class ActorNaheulbeuk extends SystemDocumentMixin(Actor) {
+
+  /** @override */
+  static DEFAULT_ICON = "systems/naheulbeuk/icons/svg/documents/actor.svg";
+
+  /* -------------------------------------------- */
+
+  /**
+   * Lazily computed store of classes, subclasses, background, and species.
+   * @type {Record<string, Record<string, ItemNaheulbeuk|ItemNaheulbeuk[]>>}
+   */
+  _lazy = {};
+
+  /* -------------------------------------------- */
+
+  /**
+   * Cached copy of the preferred artwork.
+   * @type {{ src: string, isToken: boolean, isRandom: boolean, isVideo: boolean }|null}
+   */
+  _preferredArtwork = this._preferredArtwork;
+
+  /* -------------------------------------------- */
+
+  /**
+   * Mapping of item identifiers to the items.
+   * @type {IdentifiedItemsMap<string, Set<ItemNaheulbeuk>>}
+   */
+  identifiedItems = this.identifiedItems;
+
+  /* -------------------------------------------- */
+
+  /**
+   * Mapping of item compendium source UUIDs to the items.
+   * @type {SourcedItemsMap<string, Set<ItemNaheulbeuk>>}
+   */
+  sourcedItems = this.sourcedItems;
+
+  /* -------------------------------------------- */
+
+  /**
+   * Types that can be selected within the compendium browser.
+   * @param {object} [options={}]
+   * @param {Set<string>} [options.chosen]  Types that have been selected.
+   * @returns {SelectChoices}
+   */
+  static compendiumBrowserTypes({ chosen=new Set() }={}) {
+    return new SelectChoices(Actor.TYPES.filter(t => t !== CONST.BASE_DOCUMENT_TYPE).reduce((obj, type) => {
+      obj[type] = {
+        label: CONFIG.Actor.typeLabels[type],
+        chosen: chosen.has(type)
+      };
+      return obj;
+    }, {}));
+  }
+
+  /* -------------------------------------------- */
+  /*  Properties                                  */
+  /* -------------------------------------------- */
+
+  /**
+   * A mapping of classes belonging to this Actor.
+   * @type {Record<string, ItemNaheulbeuk>}
+   */
+  get classes() {
+    if ( this._lazy?.classes !== undefined ) return this._lazy.classes;
+    return this._lazy.classes = Object.fromEntries(this.itemTypes.class.map(cls => [cls.identifier, cls]));
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Calculate the bonus from any cover the actor is affected by.
+   * @type {number}     The cover bonus to AC and dexterity saving throws.
+   */
+  get coverBonus() {
+    const { coverHalf, coverThreeQuarters } = CONFIG.NAHEULBEUK.statusEffects;
+    if ( this.statuses.has("coverThreeQuarters") ) return coverThreeQuarters?.coverBonus;
+    else if ( this.statuses.has("coverHalf") ) return coverHalf?.coverBonus;
+    return 0;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Get all classes which have spellcasting ability.
+   * @type {Record<string, ItemNaheulbeuk>}
+   */
+  get spellcastingClasses() {
+    if ( this._lazy.spellcastingClasses !== undefined ) return this._lazy.spellcastingClasses;
+    return this._lazy.spellcastingClasses = Object.entries(this.classes).reduce((obj, [identifier, cls]) => {
+      if ( cls.spellcasting && (cls.spellcasting.progression !== "none") ) obj[identifier] = cls;
+      return obj;
+    }, {});
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * A mapping of subclasses belonging to this Actor.
+   * @type {Record<string, ItemNaheulbeuk>}
+   */
+  get subclasses() {
+    if ( this._lazy?.subclasses !== undefined ) return this._lazy.subclasses;
+    return this._lazy.subclasses = Object.fromEntries(this.itemTypes.subclass.map(i => [i.identifier, i]));
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Is this Actor currently polymorphed into some other creature?
+   * @type {boolean}
+   */
+  get isPolymorphed() {
+    return this.getFlag("naheulbeuk", "isPolymorphed") || false;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * The Actor's currently equipped armor, if any.
+   * @type {ItemNaheulbeuk|null}
+   */
+  get armor() {
+    return this.system.attributes?.ac?.equippedArmor ?? null;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * The Actor's currently equipped shield, if any.
+   * @type {ItemNaheulbeuk|null}
+   */
+  get shield() {
+    return this.system.attributes?.ac?.equippedShield ?? null;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * The items this actor is concentrating on, and the relevant effects.
+   * @type {{items: Set<ItemNaheulbeuk>, effects: Set<ActiveEffectNaheulbeuk>}}
+   */
+  get concentration() {
+    const concentration = {
+      items: new Set(),
+      effects: new Set()
+    };
+
+    const limit = this.system.attributes?.concentration?.limit ?? 0;
+    if ( !limit ) return concentration;
+
+    for ( const effect of this.effects ) {
+      if ( !effect.statuses.has(CONFIG.specialStatusEffects.CONCENTRATING) ) continue;
+      const data = effect.getFlag("naheulbeuk", "item");
+      concentration.effects.add(effect);
+      if ( data ) {
+        let item = this.items.get(data.id);
+        if ( !item && (foundry.utils.getType(data.data) === "Object") ) {
+          item = new Item.implementation(data.data, { keepId: true, parent: this });
+        }
+        if ( item ) concentration.items.add(item);
+      }
+    }
+    return concentration;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Creatures summoned by this actor.
+   * @type {ActorNaheulbeuk[]}
+   */
+  get summonedCreatures() {
+    return naheulbeuk.registry.summons.creatures(this);
+  }
+
+  /* -------------------------------------------- */
+  /*  Methods                                     */
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  _initializeSource(source, options={}) {
+    if ( source instanceof foundry.abstract.DataModel ) source = source.toObject();
+
+    // Migrate encounter groups to their own Actor type.
+    if ( (source.type === "group") && (source.system?.type?.value === "encounter") ) {
+      source.type = "encounter";
+      foundry.utils.setProperty(source, "flags.naheulbeuk.persistSourceMigration", true);
+    }
+
+    source = super._initializeSource(source, options);
+    const pack = game.packs.get(options.pack);
+    if ( !source._id || !pack || !game.compendiumArt.enabled ) return source;
+    const uuid = pack.getUuid(source._id);
+    const art = game.naheulbeuk.moduleArt.map.get(uuid);
+    if ( art?.actor || art?.token ) {
+      if ( art.actor ) source.img = art.actor;
+      if ( typeof art.token === "string" ) source.prototypeToken.texture.src = art.token;
+      else if ( art.token ) foundry.utils.mergeObject(source.prototypeToken, art.token);
+      ActorNaheulbeuk.applyCompendiumArt(source, pack, art);
+    }
+    return source;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Apply package-provided art to a compendium Document.
+   * @param {object} source                  The Document's source data.
+   * @param {CompendiumCollection} pack      The Document's compendium.
+   * @param {CompendiumArtInfo} art          The art being applied.
+   */
+  static applyCompendiumArt(source, pack, art) {
+    const biography = source.system.details?.biography;
+    if ( art.credit && biography ) {
+      if ( typeof biography.value !== "string" ) biography.value = "";
+      biography.value += `<p>${art.credit}</p>`;
+    }
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  prepareData() {
+    if ( this.system.modelProvider !== naheulbeuk ) return super.prepareData();
+    this._clearCachedValues();
+    this._preparationWarnings = [];
+    this.labels = {};
+    super.prepareData();
+    this.items.forEach(item => item.prepareFinalAttributes());
+    this._prepareSpellcasting();
+  }
+
+  /* --------------------------------------------- */
+
+  /**
+   * Clear cached class collections.
+   * @internal
+   */
+  _clearCachedValues() {
+    this._lazy = {};
+    this._preferredArtwork = null;
+  }
+
+  /* --------------------------------------------- */
+
+  /** @inheritDoc */
+  prepareEmbeddedDocuments() {
+    this.identifiedItems = new IdentifiedItemsMap();
+    this.sourcedItems = new SourcedItemsMap();
+    this._embeddedPreparation = true;
+    super.prepareEmbeddedDocuments();
+    delete this._embeddedPreparation;
+  }
+
+  /* --------------------------------------------- */
+
+  /** @inheritDoc */
+  applyActiveEffects() {
+    if ( this.system?.prepareEmbeddedData instanceof Function ) this.system.prepareEmbeddedData();
+    return super.applyActiveEffects();
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  *allApplicableEffects() {
+    for ( const effect of super.allApplicableEffects() ) {
+      if ( effect.type === "enchantment" ) continue;
+      if ( effect.parent?.getFlag("naheulbeuk", "riders.effect")?.includes(effect.id) ) continue;
+      yield effect;
+    }
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Fetch an Actor by UUID and obtain a version of it in the World. If the Actor is inside a compendium, check if a
+   * version has already been imported before importing it again.
+   * @param {string} uuid                  The Actor's UUID.
+   * @param {object} [options]
+   * @param {object} [options.origin]      Optionally check if the Actor has a specific origin. If not supplied, any
+   *                                       Actor that matches the criteria will be returned.
+   * @param {string} [options.origin.key]  The origin property.
+   * @param {any} [options.origin.value]   The origin value.
+   * @returns {Promise<ActorNaheulbeuk>}
+   * @throws {Error}                       If the Actor cannot be found, or cannot be imported.
+   */
+  static async fetchExisting(uuid, options={}) {
+    const { origin } = options;
+    const actor = await fromUuid(uuid);
+    if ( !actor ) throw new Error(game.i18n.format("NAHEULBEUK.ACTOR.Warning.NoActor", { uuid }));
+
+    const { actorLink } = actor.prototypeToken;
+    const matchesOrigin = !origin || (foundry.utils.getProperty(actor, origin.key) === origin.value);
+    if ( !actor.pack && (!actorLink || matchesOrigin) ) return actor;
+
+    // Search world actors to see if any had been previously imported for this purpose.
+    // Linked actors must match the origin to be considered.
+    const localActor = game.actors.find(a => {
+      const matchesOrigin = !origin || (foundry.utils.getProperty(a, origin.key) === origin.value);
+      // Has been auto-imported by this process.
+      return (a.getFlag("naheulbeuk", "isAutoImported") || a.getFlag("naheulbeuk", "summonedCopy")) // Back-compat
+      // User has ownership of existing actor
+      && a.isOwner
+      // Sourced from the desired actor UUID.
+      && ((a._stats?.compendiumSource === uuid) || (a._stats?.duplicateSource === uuid))
+      // Unlinked or created from a specific source.
+      && (!a.prototypeToken.actorLink || matchesOrigin);
+    });
+    if ( localActor ) return localActor;
+
+    // Check permissions to create actors.
+    if ( !game.user.can("ACTOR_CREATE") ) throw new Error("NAHEULBEUK.ACTOR.Warning.CreateActor");
+
+    // No suitable world actor was found, create one.
+    if ( actor.pack ) {
+      // Template actor resides only in a compendium, import the actor into the world.
+      return game.actors.importFromCompendium(game.packs.get(actor.pack), actor.id, {
+        "flags.naheulbeuk.isAutoImported": true
+      });
+    } else {
+      // A linked world actor was found. Create a copy to avoid affecting the original.
+      return actor.clone({
+        "flags.naheulbeuk.isAutoImported": true,
+        "_stats.compendiumSource": actor._stats.compendiumSource,
+        "_stats.duplicateSource": actor.uuid
+      }, { save: true });
+    }
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Select appropriate artwork to display on sheet & chat cards based on `showTokenPortrait` flag.
+   * @returns {Promise<{ src: string, token: boolean, isRandom: boolean, isVideo: boolean }>}
+   */
+  async getPreferredArtwork() {
+    if ( !this._preferredArtwork ) {
+      const showTokenPortrait = this.getFlag("naheulbeuk", "showTokenPortrait") === true;
+      const token = this.isToken ? this.token : this.prototypeToken;
+      const defaultArtwork = Actor.implementation.getDefaultArtwork(this._source)?.img;
+      let texture = token?.texture.src;
+      if ( showTokenPortrait && token?.randomImg ) {
+        const images = await this.getTokenImages();
+        texture = images[Math.floor(Math.random() * images.length)];
+      }
+      const src = (showTokenPortrait ? texture : this.img) ?? defaultArtwork;
+      this._preferredArtwork = {
+        src,
+        isRandom: showTokenPortrait && token?.randomImg,
+        isToken: showTokenPortrait,
+        isVideo: foundry.helpers.media.VideoHelper.hasVideoExtension(src)
+      };
+    }
+    return this._preferredArtwork;
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  prepareDerivedData() {
+    const origin = this.getFlag("naheulbeuk", "summon.origin");
+    if ( origin && this.token?.id ) {
+      const { collection, primaryId } = foundry.utils.parseUuid(origin);
+      naheulbeuk.registry.summons.track(collection?.get?.(primaryId)?.uuid, this.uuid);
+    }
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Calculate the DC of a concentration save required for a given amount of damage.
+   * @param {number} damage  Amount of damage taken.
+   * @returns {number}       DC of the required concentration save.
+   */
+  getConcentrationDC(damage) {
+    return Math.clamp(
+      Math.floor(damage / 2), 10, game.settings.get("naheulbeuk", "rulesVersion") === "modern" ? 30 : Infinity
+    );
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Return the amount of experience required to gain a certain character level.
+   * @param {number} level  The desired level.
+   * @returns {number}      The XP required.
+   */
+  getLevelExp(level) {
+    const levels = CONFIG.NAHEULBEUK.CHARACTER_EXP_LEVELS;
+    return levels[Math.min(level, levels.length - 1)];
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Return the amount of experience granted by killing a creature of a certain CR.
+   * @param {number|null} cr  The creature's challenge rating.
+   * @returns {number|null}   The amount of experience granted per kill.
+   */
+  getCRExp(cr) {
+    if ( cr === null ) return null;
+    if ( cr < 1.0 ) return Math.max(200 * cr, 10);
+    return CONFIG.NAHEULBEUK.CR_EXP_LEVELS[cr] ?? Object.values(CONFIG.NAHEULBEUK.CR_EXP_LEVELS).pop();
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * @inheritdoc
+   * @param {object} [options]
+   * @param {boolean} [options.deterministic] Whether to force deterministic values for data properties that could be
+   *                                          either a die term or a flat term.
+   */
+  getRollData({ deterministic=false }={}) {
+    let data;
+    if ( this.system.getRollData ) data = this.system.getRollData({ deterministic });
+    else data = {...super.getRollData()};
+    data.flags = {...this.flags};
+    data.name = this.name;
+    data.statuses = {};
+    for ( const status of this.statuses ) {
+      data.statuses[status] = status === "exhaustion"
+        ? this.system.attributes?.exhaustion ?? 1
+        : status === "concentrating" ? this.concentration.effects.size : 1;
+    }
+    return data;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Is this actor under the effect of this property from some status or due to its level of exhaustion?
+   * @param {string} key      A key in `NAHEULBEUK.conditionEffects`.
+   * @returns {boolean}       Whether the actor is affected.
+   */
+  hasConditionEffect(key) {
+    const props = CONFIG.NAHEULBEUK.conditionEffects[key] ?? new Set();
+    const level = this.system.attributes?.exhaustion ?? null;
+    const imms = this.system.traits?.ci?.value ?? new Set();
+    const applyExhaustion = (level !== null) && !imms.has("exhaustion")
+      && (game.settings.get("naheulbeuk", "rulesVersion") === "legacy");
+    const statuses = this.statuses;
+    return props.some(k => {
+      const l = Number(k.split("-").pop());
+      return (statuses.has(k) && !imms.has(k)) || (applyExhaustion && Number.isInteger(l) && (level >= l));
+    });
+  }
+
+  /* -------------------------------------------- */
+  /*  Data Preparation                            */
+  /* -------------------------------------------- */
+
+  /**
+   * Prepares data for a specific skill.
+   * @param {string} skillId    The id of the skill to prepare data for.
+   * @param {object} [options]  Additional options passed to {@link CreatureTemplate#prepareSkill}.
+   * @returns {SkillData}
+   * @internal
+   */
+  _prepareSkill(skillId, options) {
+    return this.system.prepareSkill?.(skillId, options) ?? {};
+  }
+
+  /* -------------------------------------------- */
+  /*  Spellcasting Preparation                    */
+  /* -------------------------------------------- */
+
+  /**
+   * Prepare data related to the spell-casting capabilities of the Actor.
+   * Mutates the value of the system.spells object. Must be called after final item preparation.
+   * @protected
+   */
+  _prepareSpellcasting() {
+    if ( !this.system.spells ) return;
+
+    // Translate the list of classes into spellcasting progression
+    const progression = Object.values(CONFIG.NAHEULBEUK.spellcasting).reduce((acc, model) => {
+      if ( model.slots ) acc[model.key] = 0;
+      return acc;
+    }, {});
+    const types = {};
+
+    // Grab all classes with spellcasting
+    const classes = this.itemTypes.class.filter(cls => {
+      const type = cls.spellcasting.type;
+      if ( !type ) return false;
+      types[type] = (types[type] ?? 0) + 1;
+      return true;
+    });
+
+    for ( const cls of classes ) {
+      this.constructor.computeClassProgression(progression, cls, { actor: this, count: types[cls.spellcasting.type] });
+    }
+
+    if ( this.type === "npc" ) {
+      const level = Object.values(progression).find(_ => _);
+      if ( level ) this.system.attributes.spell.level = level;
+      else progression.spell = this.system.attributes.spell.level ?? 0;
+    }
+
+    for ( const [type, model] of Object.entries(CONFIG.NAHEULBEUK.spellcasting) ) {
+      if ( !model.slots ) continue;
+      // Assume spellcasting methods without progression are based on character level rather than class level.
+      if ( foundry.utils.isEmpty(model.progression) ) model.computeProgression(progression, this);
+      this.constructor.prepareSpellcastingSlots(this.system.spells, type, progression, { actor: this });
+    }
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Contribute to the actor's spellcasting progression.
+   * @param {object} progression                             Spellcasting progression data. *Will be mutated.*
+   * @param {ItemNaheulbeuk} cls                                     Class for whom this progression is being computed.
+   * @param {object} [config={}]
+   * @param {ActorNaheulbeuk} [config.actor]                         Actor for whom the data is being prepared.
+   * @param {SpellcastingDescription} [config.spellcasting]  Spellcasting descriptive object.
+   * @param {number} [config.count=1]                        Number of classes with this type of spellcasting.
+   */
+  static computeClassProgression(progression, cls, {actor, spellcasting, count=1}={}) {
+    const type = cls.spellcasting.type;
+    spellcasting ??= cls.spellcasting;
+
+    /**
+     * A hook event that fires while computing the spellcasting progression for each class on each actor.
+     * The actual hook names include the spellcasting type (e.g. `naheulbeuk.computeLeveledProgression`).
+     * @param {object} progression                    Spellcasting progression data. *Will be mutated.*
+     * @param {ActorNaheulbeuk|void} actor                    Actor for whom the data is being prepared.
+     * @param {ItemNaheulbeuk} cls                            Class for whom this progression is being computed.
+     * @param {SpellcastingDescription} spellcasting  Spellcasting descriptive object.
+     * @param {number} count                          Number of classes with this type of spellcasting.
+     * @returns {boolean}  Explicitly return false to prevent default progression from being calculated.
+     * @function naheulbeuk.computeSpellcastingProgression
+     * @memberof hookEvents
+     */
+    const allowed = Hooks.call(
+      `naheulbeuk.compute${type.capitalize()}Progression`, progression, actor, cls, spellcasting, count
+    );
+    const model = CONFIG.NAHEULBEUK.spellcasting[type];
+    if ( (allowed === false) || !model.slots ) return;
+
+    // Check for deprecated overrides.
+    if ( model.isSingleLevel ) {
+      if ( foundry.utils.getDefiningClass(this, "computePactProgression") !== ActorNaheulbeuk ) {
+        foundry.utils.logCompatibilityWarning("ActorNaheulbeuk.computePactProgression is deprecated. Please use "
+          + "SpellcastingModel#computeProgression instead.", { since: "Naheulbeuk 13.0", until: "Naheulbeuk 14.0" });
+        this.computePactProgression(progression, actor, cls, spellcasting, count);
+        return;
+      }
+    } else if ( foundry.utils.getDefiningClass(this, "computeLeveledProgression") !== ActorNaheulbeuk ) {
+      foundry.utils.logCompatibilityWarning("ActorNaheulbeuk.computeLeveledProgression is deprecated. Please use "
+        + "SpellcastingModel#computeProgression instead.", { since: "Naheulbeuk 13.0", until: "Naheulbeuk 14.0" });
+      this.computeLeveledProgression(progression, actor, cls, spellcasting, count);
+      return;
+    }
+
+    // Otherwise proceed with calculation.
+    model.computeProgression(progression, actor, cls, spellcasting, count);
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Prepare actor's spell slots using progression data.
+   * @param {object} spells           The `data.spells` object within actor's data. *Will be mutated.*
+   * @param {string} type             Type of spellcasting slots being prepared.
+   * @param {object} progression      Spellcasting progression data.
+   * @param {object} [config]
+   * @param {ActorNaheulbeuk} [config.actor]  Actor for whom the data is being prepared.
+   */
+  static prepareSpellcastingSlots(spells, type, progression, {actor}={}) {
+    /**
+     * A hook event that fires to convert the provided spellcasting progression into spell slots.
+     * The actual hook names include the spellcasting type (e.g. `naheulbeuk.prepareLeveledSlots`).
+     * @param {object} spells        The `data.spells` object within actor's data. *Will be mutated.*
+     * @param {ActorNaheulbeuk|void} actor   Actor for whom the data is being prepared, if any.
+     * @param {object} progression   Spellcasting progression data.
+     * @returns {boolean}            Explicitly return false to prevent default preparation from being performed.
+     * @function naheulbeuk.prepareSpellcastingSlots
+     * @memberof hookEvents
+     */
+    const allowed = Hooks.call(`naheulbeuk.prepare${type.capitalize()}Slots`, spells, actor, progression);
+    if ( allowed === false ) return;
+    const model = CONFIG.NAHEULBEUK.spellcasting[type];
+
+    // Check for deprecated overrides.
+    if ( model.isSingleLevel ) {
+      if ( foundry.utils.getDefiningClass(this, "preparePactSlots") !== ActorNaheulbeuk ) {
+        foundry.utils.logCompatibilityWarning("ActorNaheulbeuk.preparePactSlots is deprecated. Please use "
+          + "SpellcastingModel#prepareSlots instead.", { since: "Naheulbeuk 13.0", until: "Naheulbeuk 14.0" });
+        this.preparePactSlots(spells, actor, progression);
+        return;
+      }
+    } else if ( foundry.utils.getDefiningClass(this, "prepareLeveledSlots") !== ActorNaheulbeuk ) {
+      foundry.utils.logCompatibilityWarning("ActorNaheulbeuk.prepareLeveledSlots is deprecated. Please use "
+        + "SpellcastingModel#prepareSlots instead.", { since: "Naheulbeuk 13.0", until: "Naheulbeuk 14.0" });
+      this.prepareLeveledSlots(spells, actor, progression);
+      return;
+    }
+
+    // Otherwise proceed with calculation.
+    model.prepareSlots(spells, actor, progression);
+  }
+
+  /* -------------------------------------------- */
+  /*  Event Handlers                              */
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  async _preCreate(data, options, user) {
+    if ( (await super._preCreate(data, options, user)) === false ) return false;
+
+    const sourceId = this._stats?.compendiumSource;
+    if ( sourceId?.startsWith("Compendium.") ) return;
+
+    // Configure prototype token settings
+    const prototypeToken = {};
+    if ( "size" in (this.system.traits || {}) ) {
+      const size = CONFIG.NAHEULBEUK.actorSizes[this.system.traits.size || "med"].token ?? 1;
+      if ( !foundry.utils.hasProperty(data, "prototypeToken.width") ) prototypeToken.width = size;
+      if ( !foundry.utils.hasProperty(data, "prototypeToken.height") ) prototypeToken.height = size;
+    }
+    if ( this.type === "character" ) Object.assign(prototypeToken, {
+      sight: { enabled: true }, actorLink: true, disposition: CONST.TOKEN_DISPOSITIONS.FRIENDLY
+    });
+    if ( this.type === "group" ) prototypeToken.actorLink = true;
+    this.updateSource({ prototypeToken });
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  async _preUpdate(changed, options, user) {
+    if ( (await super._preUpdate(changed, options, user)) === false ) return false;
+
+    // Apply changes in Actor size to Token width/height
+    if ( "size" in (this.system.traits || {}) ) {
+      const newSize = foundry.utils.getProperty(changed, "system.traits.size");
+      if ( newSize && (newSize !== this.system.traits?.size) ) {
+        let size = CONFIG.NAHEULBEUK.actorSizes[newSize].token ?? 1;
+        if ( !foundry.utils.hasProperty(changed, "prototypeToken.width") ) {
+          changed.prototypeToken ||= {};
+          changed.prototypeToken.height = size;
+          changed.prototypeToken.width = size;
+        }
+      }
+    }
+
+    // Reset death save counters and store hp
+    if ( "hp" in (this.system.attributes || {}) ) {
+      const isDead = this.system.attributes.hp.value <= 0;
+      if ( isDead && (foundry.utils.getProperty(changed, "system.attributes.hp.value") > 0) ) {
+        foundry.utils.setProperty(changed, "system.attributes.death.success", 0);
+        foundry.utils.setProperty(changed, "system.attributes.death.failure", 0);
+      }
+      foundry.utils.setProperty(options, "naheulbeuk.hp", { ...this.system.attributes.hp });
+    }
+
+    // Record previous exhaustion level.
+    if ( Number.isFinite(foundry.utils.getProperty(changed, "system.attributes.exhaustion")) ) {
+      foundry.utils.setProperty(options, "naheulbeuk.originalExhaustion", this.system.attributes.exhaustion);
+    }
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Assign a class item as the original class for the Actor based on which class has the most levels.
+   * @returns {Promise<Actor>}  Instance of the updated actor.
+   * @protected
+   */
+  _assignPrimaryClass() {
+    const classes = this.itemTypes.class.sort((a, b) => b.system.levels - a.system.levels);
+    const newPC = classes[0]?.id || "";
+    return this.update({"system.details.originalClass": newPC});
+  }
+
+  /* -------------------------------------------- */
+  /*  Gameplay Mechanics                          */
+  /* -------------------------------------------- */
+
+  /** @override */
+  async modifyTokenAttribute(attribute, value, isDelta, isBar) {
+    if ( attribute === "attributes.hp" ) {
+      const hp = this.system.attributes.hp;
+      const delta = isDelta ? (-1 * value) : (hp.value + hp.temp) - value;
+      return this.applyDamage(delta, { isDelta });
+    } else if ( attribute.startsWith(".") ) {
+      const item = fromUuidSync(attribute, { relative: this });
+      let newValue = item?.system.uses?.value ?? 0;
+      if ( isDelta ) newValue += value;
+      else newValue = value;
+      return item?.update({ "system.uses.spent": item.system.uses.max - newValue });
+    }
+    return super.modifyTokenAttribute(attribute, value, isDelta, isBar);
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Apply a certain amount of damage or healing to the health pool for Actor
+   * @param {DamageDescription[]|number} damages     Damages to apply.
+   * @param {DamageApplicationOptions} [options={}]  Damage application options.
+   * @returns {Promise<ActorNaheulbeuk>}                     A Promise which resolves once the damage has been applied.
+   */
+  async applyDamage(damages, options={}) {
+    const hp = this.system.attributes.hp;
+    if ( !hp ) return this; // Group actors don't have HP at the moment
+
+    if ( Number.isNumeric(damages) ) {
+      damages = [{ value: damages }];
+      options.ignore ??= true;
+    }
+
+    damages = this.calculateDamage(damages, options);
+    if ( !damages ) return this;
+
+    const { amount, temp } = damages;
+    const deltaTemp = amount > 0 ? Math.min(hp.temp, amount) : 0;
+    const deltaHP = Math.clamp(amount - deltaTemp, -hp.damage, hp.value);
+    const updates = {
+      "system.attributes.hp.temp": hp.temp - deltaTemp,
+      "system.attributes.hp.value": hp.value - deltaHP
+    };
+
+    if ( temp > updates["system.attributes.hp.temp"] ) updates["system.attributes.hp.temp"] = temp;
+
+    /**
+     * A hook event that fires before damage is applied to an actor.
+     * @param {ActorNaheulbeuk} actor                     Actor the damage will be applied to.
+     * @param {number} amount                     Amount of damage that will be applied.
+     * @param {object} updates                    Distinct updates to be performed on the actor.
+     * @param {DamageApplicationOptions} options  Additional damage application options.
+     * @returns {boolean}                         Explicitly return `false` to prevent damage application.
+     * @function naheulbeuk.preApplyDamage
+     * @memberof hookEvents
+     */
+    if ( Hooks.call("naheulbeuk.preApplyDamage", this, amount, updates, options) === false ) return this;
+
+    // Delegate damage application to a hook
+    // TODO: Replace this in the future with a better modifyTokenAttribute function in the core
+    if ( Hooks.call("modifyTokenAttribute", {
+      attribute: "attributes.hp",
+      value: amount,
+      isDelta: false,
+      isBar: true
+    }, updates) === false ) return this;
+
+    await this.update(updates);
+
+    /**
+     * A hook event that fires after damage has been applied to an actor.
+     * @param {ActorNaheulbeuk} actor                     Actor that has been damaged.
+     * @param {number} amount                     Amount of damage that has been applied.
+     * @param {DamageApplicationOptions} options  Additional damage application options.
+     * @function naheulbeuk.applyDamage
+     * @memberof hookEvents
+     */
+    Hooks.callAll("naheulbeuk.applyDamage", this, amount, options);
+
+    return this;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Calculate the damage that will be applied to this actor.
+   * @param {DamageDescription[]} damages            Damages to calculate.
+   * @param {DamageApplicationOptions} [options={}]  Damage calculation options.
+   * @returns {DamageSummary|false}                  New damage descriptions with changes applied, or `false` if the
+   *                                                 calculation was canceled.
+   */
+  calculateDamage(damages, options={}) {
+    damages = foundry.utils.deepClone(damages);
+    damages.amount = 0;
+    damages.temp = 0;
+
+    /**
+     * A hook event that fires before damage amount is calculated for an actor.
+     * @param {ActorNaheulbeuk} actor                     The actor being damaged.
+     * @param {DamageDescription[]} damages       Damage descriptions.
+     * @param {DamageApplicationOptions} options  Additional damage application options.
+     * @returns {boolean}                         Explicitly return `false` to prevent damage application.
+     * @function naheulbeuk.preCalculateDamage
+     * @memberof hookEvents
+     */
+    if ( Hooks.call("naheulbeuk.preCalculateDamage", this, damages, options) === false ) return false;
+
+    const multiplier = options.multiplier ?? 1;
+
+    const downgrade = type => options.downgrade === true || options.downgrade?.has?.(type);
+    const ignore = (category, type, skipDowngrade) => {
+      return options.ignore === true
+        || options.ignore?.[category] === true
+        || options.ignore?.[category]?.has?.(type)
+        || ((category === "immunity") && downgrade(type) && !skipDowngrade)
+        || ((category === "resistance") && downgrade(type) && !hasEffect("di", type));
+    };
+
+    const traits = this.system.traits ?? {};
+    const hasEffect = (category, type, properties) => {
+      if ( (category === "dr") && downgrade(type) && hasEffect("di", type, properties)
+        && !ignore("immunity", type, true) ) return true;
+      const config = traits[category];
+      if ( !config?.value.has(type) ) return false;
+      if ( !CONFIG.NAHEULBEUK.damageTypes[type]?.isPhysical || !properties?.size ) return true;
+      return !config.bypasses?.intersection(properties)?.size;
+    };
+
+    const skipped = type => {
+      if ( options.only === "damage" ) return type in CONFIG.NAHEULBEUK.healingTypes;
+      if ( options.only === "healing" ) return type in CONFIG.NAHEULBEUK.damageTypes;
+      return false;
+    };
+
+    const rollData = this.getRollData({deterministic: true});
+
+    damages.forEach(d => {
+      d.active ??= {};
+
+      // Skip damage types with immunity
+      if ( skipped(d.type) || (!ignore("immunity", d.type) && hasEffect("di", d.type, d.properties)) ) {
+        d.value = 0;
+        d.active.multiplier = 0;
+        d.active.immunity = true;
+        return;
+      }
+
+      // Apply type-specific damage reduction
+      if ( !ignore("modification", d.type) && traits.dm?.amount[d.type]
+        && !traits.dm.bypasses.intersection(d.properties).size ) {
+        const modification = simplifyBonus(traits.dm.amount[d.type], rollData);
+        if ( Math.sign(d.value) !== Math.sign(d.value + modification) ) d.value = 0;
+        else d.value += modification;
+        d.active.modification = true;
+      }
+
+      let damageMultiplier = multiplier;
+
+      // Apply type-specific damage resistance
+      if ( !ignore("resistance", d.type) && hasEffect("dr", d.type, d.properties) ) {
+        damageMultiplier /= 2;
+        d.active.resistance = true;
+      }
+
+      // Apply type-specific damage vulnerability
+      if ( !ignore("vulnerability", d.type) && hasEffect("dv", d.type, d.properties) ) {
+        damageMultiplier *= 2;
+        d.active.vulnerability = true;
+      }
+
+      // Negate healing types
+      if ( (options.invertHealing !== false) && (d.type === "healing") ) damageMultiplier *= -1;
+
+      d.value = d.value * damageMultiplier;
+      d.active.multiplier = (d.active.multiplier ?? 1) * damageMultiplier;
+      if ( d.type === "temphp" ) damages.temp += d.value;
+      else damages.amount += d.value;
+    });
+
+    damages.amount = damages.amount > 0 ? Math.floor(damages.amount) : Math.ceil(damages.amount);
+
+    // Apply damage threshold
+    if ( ((damages.amount > 0) && (damages.amount < (this.system.attributes?.hp?.dt ?? -Infinity)))
+      && !((options.ignore === true) || options.ignore?.threshold) ) {
+      damages.amount = 0;
+      damages.forEach(d => {
+        d.value = 0;
+        d.active.multiplier = 0;
+        d.active.threshold = true;
+      });
+    }
+
+    /**
+     * A hook event that fires after damage values are calculated for an actor.
+     * @param {ActorNaheulbeuk} actor                     The actor being damaged.
+     * @param {DamageSummary} damages             Damage descriptions.
+     * @param {DamageApplicationOptions} options  Additional damage application options.
+     * @returns {boolean}                         Explicitly return `false` to prevent damage application.
+     * @function naheulbeuk.calculateDamage
+     * @memberof hookEvents
+     */
+    if ( Hooks.call("naheulbeuk.calculateDamage", this, damages, options) === false ) return false;
+
+    return damages;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Apply a certain amount of temporary hit point, but only if it's more than the actor currently has.
+   * @param {number} amount       An amount of temporary hit points to set
+   * @returns {Promise<ActorNaheulbeuk>}  A Promise which resolves once the temp HP has been applied
+   */
+  async applyTempHP(amount=0) {
+    amount = parseInt(amount);
+    const hp = this.system.attributes.hp;
+
+    // Update the actor if the new amount is greater than the current
+    const tmp = parseInt(hp.temp) || 0;
+    return amount > tmp ? this.update({"system.attributes.hp.temp": amount}) : this;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Get a color used to represent the current hit points of an Actor.
+   * @param {number} current        The current HP value
+   * @param {number} max            The maximum HP value
+   * @returns {Color}               The color used to represent the HP percentage
+   */
+  static getHPColor(current, max) {
+    const pct = Math.clamp(current, 0, max) / max;
+    return Color.fromRGB([(1-(pct/2)), pct, 0]);
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Initiate concentration on an item.
+   * @param {Activity} activity                  The activity on which to being concentration.
+   * @param {object} [effectData]                Effect data to merge into the created effect.
+   * @returns {Promise<ActiveEffectNaheulbeuk|void>}     A promise that resolves to the created effect.
+   */
+  async beginConcentrating(activity, effectData={}) {
+    effectData = ActiveEffectNaheulbeuk.createConcentrationEffectData(activity, effectData);
+
+    /**
+     * A hook that is called before a concentration effect is created.
+     * @function naheulbeuk.preBeginConcentrating
+     * @memberof hookEvents
+     * @param {ActorNaheulbeuk} actor         The actor initiating concentration.
+     * @param {ItemNaheulbeuk} item           The item that will be concentrated on.
+     * @param {object} effectData     Data used to create the ActiveEffect.
+     * @param {Activity} activity     The activity that triggered the concentration.
+     * @returns {boolean}             Explicitly return false to prevent the effect from being created.
+     */
+    if ( Hooks.call("naheulbeuk.preBeginConcentrating", this, activity.item, effectData, activity) === false ) return;
+
+    const effect = await ActiveEffectNaheulbeuk.create(effectData, { parent: this });
+
+    /**
+     * A hook that is called after a concentration effect is created.
+     * @function naheulbeuk.createConcentrating
+     * @memberof hookEvents
+     * @param {ActorNaheulbeuk} actor             The actor initiating concentration.
+     * @param {ItemNaheulbeuk} item               The item that is being concentrated on.
+     * @param {ActiveEffectNaheulbeuk} effect     The created ActiveEffect instance.
+     * @param {Activity} activity         The activity that triggered the concentration.
+     */
+    Hooks.callAll("naheulbeuk.beginConcentrating", this, activity.item, effect, activity);
+
+    return effect;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * End concentration on an item.
+   * @param {ItemNaheulbeuk|ActiveEffectNaheulbeuk|string} [target]    An item or effect to end concentration on, or id of an effect.
+   *                                                   If not provided, all maintained effects are removed.
+   * @returns {Promise<ActiveEffectNaheulbeuk[]>}              A promise that resolves to the deleted effects.
+   */
+  async endConcentration(target) {
+    let effect;
+    const { effects } = this.concentration;
+
+    if ( !target ) {
+      return effects.reduce(async (acc, effect) => {
+        acc = await acc;
+        return acc.concat(await this.endConcentration(effect));
+      }, []);
+    }
+
+    if ( foundry.utils.getType(target) === "string" ) effect = effects.find(e => e.id === target);
+    else if ( target instanceof ActiveEffectNaheulbeuk ) effect = effects.has(target) ? target : null;
+    else if ( target instanceof ItemNaheulbeuk ) {
+      effect = effects.find(e => {
+        const data = e.getFlag("naheulbeuk", "item") ?? {};
+        return (data.id === target._id) || (data.data?._id === target._id);
+      });
+    }
+    if ( !effect ) return [];
+
+    /**
+     * A hook that is called before a concentration effect is deleted.
+     * @function naheulbeuk.preEndConcentration
+     * @memberof hookEvents
+     * @param {ActorNaheulbeuk} actor             The actor ending concentration.
+     * @param {ActiveEffectNaheulbeuk} effect     The ActiveEffect that will be deleted.
+     * @returns {boolean}                 Explicitly return false to prevent the effect from being deleted.
+     */
+    if ( Hooks.call("naheulbeuk.preEndConcentration", this, effect) === false) return [];
+
+    await effect.delete();
+
+    /**
+     * A hook that is called after a concentration effect is deleted.
+     * @function naheulbeuk.endConcentration
+     * @memberof hookEvents
+     * @param {ActorNaheulbeuk} actor             The actor ending concentration.
+     * @param {ActiveEffectNaheulbeuk} effect     The ActiveEffect that was deleted.
+     */
+    Hooks.callAll("naheulbeuk.endConcentration", this, effect);
+
+    return [effect];
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Create a chat message for this actor with a prompt to challenge concentration.
+   * @param {object} [options]
+   * @param {number} [options.dc]         The target value of the saving throw.
+   * @param {string} [options.ability]    An ability to use instead of the default.
+   * @returns {Promise<ChatMessageNaheulbeuk>}    A promise that resolves to the created chat message.
+   */
+  async challengeConcentration({ dc=10, ability=null }={}) {
+    const isConcentrating = this.concentration.effects.size > 0;
+    if ( !isConcentrating ) return null;
+
+    const dataset = {
+      action: "concentration",
+      dc: dc
+    };
+    if ( ability in CONFIG.NAHEULBEUK.abilities ) dataset.ability = ability;
+
+    const config = {
+      type: "concentration",
+      format: "short",
+      icon: true
+    };
+
+    return ChatMessage.implementation.create({
+      content: await foundry.applications.handlebars.renderTemplate(
+        "systems/naheulbeuk/templates/chat/roll-request-card.hbs",
+        {
+          buttons: [{
+            dataset: { ...dataset, type: "concentration", visbility: "all" },
+            buttonLabel: createRollLabel({ ...dataset, ...config }),
+            hiddenLabel: createRollLabel({ ...dataset, ...config, hideDC: true })
+          }]
+        }
+      ),
+      whisper: game.users.filter(user => this.testUserPermission(user, "OWNER")),
+      speaker: ChatMessage.implementation.getSpeaker({ actor: this })
+    });
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Determine whether the provided ability is usable for remarkable athlete.
+   * @param {string} ability  Ability type to check.
+   * @returns {boolean}       Whether the actor has the remarkable athlete flag and the ability is physical.
+   * @private
+   */
+  _isRemarkableAthlete(ability) {
+    return (game.settings.get("naheulbeuk", "rulesVersion") === "legacy") && this.getFlag("naheulbeuk", "remarkableAthlete")
+      && CONFIG.NAHEULBEUK.characterFlags.remarkableAthlete.abilities.includes(ability);
+  }
+
+  /* -------------------------------------------- */
+  /*  Rolling                                     */
+  /* -------------------------------------------- */
+
+  /**
+   * Add the reduction to this roll from exhaustion if using the modern rules.
+   * @param {string[]} parts  Roll parts.
+   * @param {object} data     Roll data.
+   */
+  addRollExhaustion(parts, data) {
+    if ( (game.settings.get("naheulbeuk", "rulesVersion") !== "modern") || !this.system.attributes?.exhaustion ) return;
+    const amount = this.system.attributes.exhaustion * (CONFIG.NAHEULBEUK.conditionTypes.exhaustion?.reduction?.rolls ?? 0);
+    if ( amount ) {
+      parts.push("@exhaustion");
+      data.exhaustion = -amount;
+    }
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Handle rolling a skill as part of a requested group check.
+   * @param {ActorNaheulbeuk} actor                                      The actor.
+   * @param {ChatMessageNaheulbeuk} request                              The request message.
+   * @param {Partial<SkillToolRollProcessConfiguration>} config  Roll configuration.
+   * @param {RequestOptionsNaheulbeuk} [requestOptions]
+   * @returns {Promise<ChatMessageNaheulbeuk|null>}
+   */
+  static async handleSkillCheckRequest(actor, request, config, { event }={}) {
+    const data = {};
+    foundry.utils.setProperty(data, "flags.naheulbeuk.requestResult", { actorUuid: actor.uuid, requestId: request.id });
+    const [roll] = (await actor.rollSkill({ ...config, event }, {}, { data })) ?? [];
+    return roll?.parent ?? null;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Roll an ability check with a skill.
+   * @param {Partial<SkillToolRollProcessConfiguration>} config  Configuration information for the roll.
+   * @param {Partial<SkillToolRollDialogConfiguration>} dialog   Configuration for the roll dialog.
+   * @param {Partial<BasicRollMessageConfiguration>} message     Configuration for the roll message.
+   * @returns {Promise<D20Roll[]|null>}                          A Promise which resolves to the created Roll instance.
+   */
+  async rollSkill(config={}, dialog={}, message={}) {
+    if ( (typeof this.system.rollSkill === "function")
+      && (await this.system.rollSkill(config, dialog, message) === false) ) return null;
+    if ( !this.system.skills ) return null;
+    const skillLabel = CONFIG.NAHEULBEUK.skills[config.skill]?.label ?? "";
+    const ability = config.ability ?? this.system.skills[config.skill]?.ability ?? CONFIG.NAHEULBEUK.skills[config.skill]?.ability ?? "";
+    const abilityLabel = CONFIG.NAHEULBEUK.abilities[ability]?.label ?? "";
+    const dialogConfig = foundry.utils.mergeObject({
+      options: {
+        window: {
+          title: game.i18n.format("NAHEULBEUK.SkillPromptTitle", { skill: skillLabel, ability: abilityLabel }),
+          subtitle: this.name
+        }
+      }
+    }, dialog);
+    return this.#rollSkillTool("skill", config, dialogConfig, message);
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Roll an ability check with a tool.
+   * @param {Partial<SkillToolRollProcessConfiguration>} config  Configuration information for the roll.
+   * @param {Partial<SkillToolRollDialogConfiguration>} dialog   Configuration for the roll dialog.
+   * @param {Partial<BasicRollMessageConfiguration>} message     Configuration for the roll message.
+   * @returns {Promise<D20Roll[]|null>}                          A Promise which resolves to the created Roll instance.
+   */
+  async rollToolCheck(config={}, dialog={}, message={}) {
+    const toolLabel = Trait.keyLabel(config.tool, { trait: "tool" }) ?? "";
+    const dialogConfig = foundry.utils.mergeObject({
+      options: {
+        window: {
+          title: game.i18n.format("NAHEULBEUK.ToolPromptTitle", { tool: toolLabel }),
+          subtitle: this.name
+        }
+      }
+    }, dialog);
+    return this.#rollSkillTool("tool", config, dialogConfig, message);
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Shared rolling functionality between skill & tool checks.
+   * @param {"skill"|"tool"} type                                Type of roll.
+   * @param {Partial<SkillToolRollProcessConfiguration>} config  Configuration information for the roll.
+   * @param {Partial<SkillToolRollDialogConfiguration>} dialog   Configuration for the roll dialog.
+   * @param {Partial<BasicRollMessageConfiguration>} message     Configuration for the roll message.
+   * @returns {Promise<D20Roll[]|null>}                          A Promise which resolves to the created Roll instance.
+   */
+  async #rollSkillTool(type, config={}, dialog={}, message={}) {
+    let oldFormat = false;
+    const name = type === "skill" ? "Skill" : "ToolCheck";
+
+    const skillConfig = CONFIG.NAHEULBEUK.skills[config.skill];
+    const toolConfig = CONFIG.NAHEULBEUK.tools[config.tool] ?? CONFIG.NAHEULBEUK.vehicleTypes[config.tool];
+    if ( ((type === "skill") && !skillConfig) || ((type === "tool") && !toolConfig) ) {
+      return this.rollAbilityCheck(config, dialog, message);
+    }
+
+    const relevant = type === "skill" ? this.system.skills?.[config.skill] : this.system.tools?.[config.tool];
+    const alternate = type === "skill" ? this.system.tools?.[config.tool] : this.system.skills?.[config.skill];
+    const abilityId = config.ability ?? relevant?.ability ?? (type === "skill" ? skillConfig.ability : toolConfig.ability);
+    const ability = this.system.abilities?.[abilityId];
+    const hostActor = this.isPolymorphed && this.flags?.naheulbeuk?.transformOptions?.mergeSkills && (type === "skill")
+      ? game.actors.get(this.flags.naheulbeuk?.originalActor) : null;
+    const buildConfig = this._buildSkillToolConfig.bind(this, type, hostActor);
+    const doubleProf = !!relevant?.prof.hasProficiency && !!alternate?.prof.hasProficiency;
+    const pace = TravelField.getTravelPaceMode(config.pace, config.skill);
+
+    const { advantage, disadvantage } = AdvantageModeField.combineFields(this.system, [
+      `abilities.${abilityId}.check.roll.mode`,
+      `${type}s.${type === "skill" ? config.skill : config.tool}.roll.mode`
+    ], {
+      advantages: { count: Number(doubleProf) + Number(pace.advantage) },
+      disadvantages: { count: Number(pace.disadvantage) }
+    });
+
+    const rollConfig = foundry.utils.mergeObject({
+      advantage, disadvantage,
+      ability: relevant?.ability ?? (type === "skill" ? skillConfig.ability : toolConfig?.ability),
+      halflingLucky: this.getFlag("naheulbeuk", "halflingLucky"),
+      reliableTalent: (relevant?.value >= 1) && this.getFlag("naheulbeuk", "reliableTalent")
+    }, config);
+    rollConfig.hookNames = [...(config.hookNames ?? []), type, "abilityCheck", "d20Test"];
+    rollConfig.rolls = [CONFIG.Dice.D20Roll.mergeConfigs({
+      options: {
+        maximum: Math.min(relevant?.roll.max ?? Infinity, ability?.check.roll.max ?? Infinity),
+        minimum: Math.max(relevant?.roll.min ?? -Infinity, ability?.check.roll.min ?? -Infinity)
+      }
+    }, config.rolls?.shift())].concat(config.rolls ?? []);
+    rollConfig.subject = this;
+
+    const dialogConfig = foundry.utils.mergeObject({
+      applicationClass: SkillToolRollConfigurationDialog,
+      options: {
+        buildConfig,
+        chooseAbility: true
+      }
+    }, dialog);
+
+    const abilityLabel = CONFIG.NAHEULBEUK.abilities[abilityId]?.label ?? "";
+
+    const messageConfig = foundry.utils.mergeObject({
+      create: true,
+      data: {
+        flags: {
+          naheulbeuk: {
+            messageType: "roll",
+            roll: {
+              [`${type}Id`]: config[type],
+              type
+            }
+          }
+        },
+        flavor: type === "skill"
+          ? game.i18n.format("NAHEULBEUK.SkillPromptTitle", { skill: skillConfig.label, ability: abilityLabel })
+          : game.i18n.format("NAHEULBEUK.ToolPromptTitle", { tool: Trait.keyLabel(config.tool, { trait: "tool" }) ?? "" }),
+        speaker: ChatMessage.getSpeaker({ actor: this })
+      }
+    }, message);
+
+    const rolls = await CONFIG.Dice.D20Roll.build(rollConfig, dialogConfig, messageConfig);
+    if ( !rolls.length ) return null;
+
+    /**
+     * A hook event that fires after a skill or tool check has been rolled.
+     * @function naheulbeuk.rollSkill
+     * @function naheulbeuk.rollToolCheck
+     * @memberof hookEvents
+     * @param {D20Roll[]} rolls       The resulting rolls.
+     * @param {object} data
+     * @param {string} data.ability   Ability used as defined in `CONFIG.NAHEULBEUK.abilities`.
+     * @param {string} [data.skill]   ID of the skill that was rolled as defined in `CONFIG.NAHEULBEUK.skills`.
+     * @param {string} [data.tool]    ID of the tool that was rolled as defined in `CONFIG.NAHEULBEUK.tools`.
+     * @param {ActorNaheulbeuk} data.subject  Actor for which the roll has been performed.
+     */
+    const data = { ability: rollConfig.ability, [type]: rollConfig[type], subject: this };
+    Hooks.callAll(`naheulbeuk.roll${name}`, rolls, data);
+    Hooks.callAll(`naheulbeuk.roll${name}V2`, rolls, data);
+
+    return oldFormat ? rolls[0] : rolls;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Configure a roll config for each roll performed as part of the skill or tool check process. Will be called once
+   * per roll in the process each time an option is changed in the roll configuration interface.
+   * @param {"skill"|"tool"} type                          Type of roll.
+   * @param {ActorNaheulbeuk|null} hostActor                       The original actor from which this one was transformed.
+   * @param {D20RollProcessConfiguration} process          Configuration for the entire rolling process.
+   * @param {D20RollConfiguration} config                  Configuration for a specific roll.
+   * @param {FormDataExtended} [formData]                  Any data entered into the rolling prompt.
+   * @param {number} index                                 Index of the roll within all rolls being prepared.
+   */
+  _buildSkillToolConfig(type, hostActor, process, config, formData, index) {
+    const relevant = type === "skill" ? this.system.skills?.[process.skill] : this.system.tools?.[process.tool];
+    const rollData = this.getRollData();
+    const abilityId = formData?.get("ability") ?? process.ability;
+    const ability = this.system.abilities?.[abilityId];
+    const { calculateSkillToolProficiency } = naheulbeuk.dataModels.actor.CommonTemplate;
+    let prof = calculateSkillToolProficiency(this, abilityId, process);
+    const originalProf = calculateSkillToolProficiency(hostActor, abilityId, process);
+    if ( originalProf?.multiplier > prof.multiplier ) prof = originalProf;
+
+    let { parts, data } = CONFIG.Dice.D20Roll.constructParts({
+      mod: ability?.mod,
+      prof: prof?.hasProficiency ? prof.term : null,
+      [`${config[type]}Bonus`]: relevant?.bonuses?.check,
+      extraBonus: process.bonus,
+      [`${abilityId}CheckBonus`]: ability?.bonuses?.check,
+      [`${type}Bonus`]: this.system.bonuses?.abilities?.[type],
+      abilityCheckBonus: this.system.bonuses?.abilities?.check
+    }, { ...rollData });
+
+    // Add exhaustion reduction
+    this.addRollExhaustion(parts, data);
+
+    config.parts = [...(config.parts ?? []), ...parts];
+    config.data = { ...data, ...(config.data ?? {}) };
+    config.data.abilityId = abilityId;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Roll a generic ability test or saving throw.
+   * Prompt the user for input on which variety of roll they want to do.
+   * @param {Partial<AbilityRollProcessConfiguration>} config  Configuration information for the roll.
+   * @param {Partial<BasicRollDialogConfiguration>} dialog     Configuration for the roll dialog.
+   * @param {Partial<BasicRollMessageConfiguration>} message   Configuration for the roll message.
+   */
+  rollAbility(config={}, dialog={}, message={}) {
+    const abilityId = config.ability;
+    const label = CONFIG.NAHEULBEUK.abilities[abilityId]?.label ?? "";
+    new foundry.applications.api.Dialog({
+      window: { title: `${game.i18n.format("NAHEULBEUK.AbilityPromptTitle", { ability: label })}: ${this.name}` },
+      position: { width: 400 },
+      content: `<p>${game.i18n.format("NAHEULBEUK.AbilityPromptText", { ability: label })}</p>`,
+      buttons: [
+        {
+          action: "test",
+          label: game.i18n.localize("NAHEULBEUK.ActionAbil"),
+          callback: () => this.rollAbilityCheck(config, dialog, message)
+        },
+        {
+          action: "save",
+          label: game.i18n.localize("NAHEULBEUK.ActionSave"),
+          callback: () => this.rollSavingThrow(config, dialog, message)
+        }
+      ]
+    }).render({ force: true });
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Roll an Ability Check.
+   * @param {Partial<AbilityRollProcessConfiguration>} config  Configuration information for the roll.
+   * @param {Partial<BasicRollDialogConfiguration>} dialog     Configuration for the roll dialog.
+   * @param {Partial<BasicRollMessageConfiguration>} message   Configuration for the roll message.
+   * @returns {Promise<D20Roll[]|null>}                        A Promise which resolves to the created Roll instance.
+   */
+  async rollAbilityCheck(config={}, dialog={}, message={}) {
+    const abilityLabel = CONFIG.NAHEULBEUK.abilities[config.ability]?.label ?? "";
+    const dialogConfig = foundry.utils.mergeObject({
+      options: {
+        window: {
+          title: game.i18n.format("NAHEULBEUK.AbilityPromptTitle", { ability: abilityLabel }),
+          subtitle: this.name
+        }
+      }
+    }, dialog);
+    return this.#rollD20Test("check", config, dialogConfig, message);
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Roll a Saving Throw.
+   * @param {Partial<AbilityRollProcessConfiguration>} config  Configuration information for the roll.
+   * @param {Partial<BasicRollDialogConfiguration>} dialog     Configuration for the roll dialog.
+   * @param {Partial<BasicRollMessageConfiguration>} message   Configuration for the roll message.
+   * @returns {Promise<D20Roll[]|null>}                        A Promise which resolves to the created Roll instances.
+   */
+  async rollSavingThrow(config={}, dialog={}, message={}) {
+    const abilityLabel = CONFIG.NAHEULBEUK.abilities[config.ability]?.label ?? "";
+    const dialogConfig = foundry.utils.mergeObject({
+      options: {
+        window: {
+          title: game.i18n.format("NAHEULBEUK.SavePromptTitle", { ability: abilityLabel }),
+          subtitle: this.name
+        }
+      }
+    }, dialog);
+    return this.#rollD20Test("save", config, dialogConfig, message);
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Shared rolling functionality between ability checks & saving throws.
+   * @param {"check"|"save"} type                     D20 test type.
+   * @param {Partial<AbilityRollProcessConfiguration>} config  Configuration information for the roll.
+   * @param {Partial<BasicRollDialogConfiguration>} dialog     Configuration for the roll dialog.
+   * @param {Partial<BasicRollMessageConfiguration>} message   Configuration for the roll message.
+   * @returns {Promise<D20Roll[]|null>}               A Promise which resolves to the created Roll instance.
+   */
+  async #rollD20Test(type, config={}, dialog={}, message={}) {
+    let oldFormat = false;
+    const name = type === "check" ? "AbilityCheck" : "SavingThrow";
+
+    const ability = this.system.abilities?.[config.ability];
+    const abilityConfig = CONFIG.NAHEULBEUK.abilities[config.ability];
+
+    const rollData = this.getRollData();
+    let { parts, data } = CONFIG.Dice.D20Roll.constructParts({
+      mod: ability?.mod,
+      prof: ability?.[`${type}Prof`].hasProficiency ? ability[`${type}Prof`].term : null,
+      [`${config.ability}${type.capitalize()}Bonus`]: ability?.bonuses[type],
+      [`${type}Bonus`]: this.system.bonuses?.abilities?.[type],
+      cover: (config.ability === "dex") && (type === "save") ? this.system.attributes?.ac?.cover : null
+    }, rollData);
+    const options = {
+      advantage: ability?.[type]?.roll.mode === CONFIG.Dice.D20Roll.ADV_MODE.ADVANTAGE,
+      disadvantage: ability?.[type]?.roll.mode === CONFIG.Dice.D20Roll.ADV_MODE.DISADVANTAGE,
+      maximum: ability?.[type]?.roll.max,
+      minimum: ability?.[type]?.roll.min
+    };
+
+    const rollConfig = foundry.utils.mergeObject({
+      halflingLucky: this.getFlag("naheulbeuk", "halflingLucky")
+    }, config);
+    rollConfig.hookNames = [...(config.hookNames ?? []), name, "d20Test"];
+    rollConfig.rolls = [
+      CONFIG.Dice.D20Roll.mergeConfigs({ parts, data, options }, config.rolls?.shift())
+    ].concat(config.rolls ?? []);
+    rollConfig.rolls.forEach(({ parts, data }) => this.addRollExhaustion(parts, data));
+    rollConfig.subject = this;
+
+    const dialogConfig = foundry.utils.deepClone(dialog);
+
+    const messageConfig = foundry.utils.mergeObject({
+      create: true,
+      data: {
+        flags: {
+          naheulbeuk: {
+            messageType: "roll",
+            roll: {
+              ability: config.ability,
+              type: type === "check" ? "ability" : "save"
+            }
+          }
+        },
+        flavor: game.i18n.format(
+          `NAHEULBEUK.${type === "check" ? "Ability" : "Save"}PromptTitle`, { ability: abilityConfig?.label ?? "" }
+        ),
+        speaker: ChatMessage.getSpeaker({ actor: this })
+      }
+    }, message);
+
+    const rolls = await CONFIG.Dice.D20Roll.build(rollConfig, dialogConfig, messageConfig);
+
+    // TODO: Temporary fix to re-apply roll mode back to original config object to allow calling methods to
+    // access the roll mode set in the dialog. There should be a better fix for this that works for all rolls.
+    message.rollMode = messageConfig.rollMode;
+
+    if ( !rolls.length ) return null;
+
+    /**
+     * A hook event that fires after an ability check or save has been rolled.
+     * @function naheulbeuk.rollAbilityCheck
+     * @function naheulbeuk.rollSavingThrow
+     * @memberof hookEvents
+     * @param {D20Roll[]} rolls       The resulting rolls.
+     * @param {object} data
+     * @param {string} data.ability   ID of the ability that was rolled as defined in `CONFIG.NAHEULBEUK.abilities`.
+     * @param {ActorNaheulbeuk} data.subject  Actor for which the roll has been performed.
+     */
+    Hooks.callAll(`naheulbeuk.roll${name}`, rolls, { ability: config.ability, subject: this });
+
+    return oldFormat ? rolls[0] : rolls;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Perform a death saving throw, rolling a d20 plus any global save bonuses.
+   * @param {Partial<D20RollProcessConfiguration>} config     Configuration information for the roll.
+   * @param {Partial<BasicRollDialogConfiguration>} dialog    Configuration for the roll dialog.
+   * @param {Partial<BasicRollMessageConfiguration>} message  Configuration for the roll message.
+   * @returns {Promise<D20Roll[]|null>}                       A Promise which resolves to the Roll instance.
+   */
+  async rollDeathSave(config={}, dialog={}, message={}) {
+    let oldFormat = false;
+    const death = this.system.attributes?.death;
+    if ( !death ) throw new Error(`Actors of the type '${this.type}' don't support death saves.`);
+
+    // Display a warning if we are not at zero HP or if we already have reached 3
+    if ( (this.system.attributes.hp.value > 0) || (death.failure >= 3) || (death.success >= 3) ) {
+      ui.notifications.warn("NAHEULBEUK.DeathSaveUnnecessary", { localize: true });
+      return null;
+    }
+
+    const parts = [];
+    let data = {};
+    const options = {
+      advantage: death.roll.mode === CONFIG.Dice.D20Roll.ADV_MODE.ADVANTAGE,
+      disadvantage: death.roll.mode === CONFIG.Dice.D20Roll.ADV_MODE.DISADVANTAGE,
+      maximum: death.roll.max,
+      minimum: death.roll.min
+    };
+
+    // Diamond Soul adds proficiency
+    if ( this.getFlag("naheulbeuk", "diamondSoul") ) {
+      parts.push("@prof");
+      data.prof = new Proficiency(this.system.attributes.prof, 1).term;
+    }
+
+    // Death save bonus
+    if ( death.bonuses.save ) parts.push(death.bonuses.save);
+
+    const rollConfig = foundry.utils.mergeObject({ target: 10 }, config);
+    rollConfig.hookNames = [...(config.hookNames ?? []), "deathSave"];
+    rollConfig.rolls = [
+      CONFIG.Dice.D20Roll.mergeConfigs({ parts, data, options }, config.rolls?.shift())
+    ].concat(config.rolls ?? []);
+
+    const dialogConfig = foundry.utils.deepClone(dialog);
+
+    const messageConfig = foundry.utils.mergeObject({
+      data: {
+        flags: {
+          naheulbeuk: {
+            roll: {
+              type: "death"
+            }
+          }
+        },
+        flavor: game.i18n.localize("NAHEULBEUK.DeathSavingThrow")
+      }
+    }, message);
+
+    const rolls = await this.rollSavingThrow(rollConfig, dialogConfig, messageConfig);
+    if ( !rolls?.length ) return null;
+
+    // Take action depending on the result
+    const details = { subject: this };
+    const roll = rolls[0];
+    const returnValue = oldFormat ? roll : rolls;
+
+    // Save success
+    if ( roll.total >= (roll.options.target ?? 10) ) {
+      let successes = (death.success || 0) + 1;
+
+      // Critical Success = revive with 1hp
+      if ( roll.isCritical ) {
+        details.updates = {
+          "system.attributes.death.success": 0,
+          "system.attributes.death.failure": 0,
+          "system.attributes.hp.value": 1
+        };
+        details.chatString = "NAHEULBEUK.DeathSaveCriticalSuccess";
+      }
+
+      // 3 Successes = survive and reset checks
+      else if ( successes === 3 ) {
+        details.updates = {
+          "system.attributes.death.success": 0,
+          "system.attributes.death.failure": 0
+        };
+        details.chatString = "NAHEULBEUK.DeathSaveSuccess";
+      }
+
+      // Increment successes
+      else details.updates = {"system.attributes.death.success": Math.clamp(successes, 0, 3)};
+    }
+
+    // Save failure
+    else {
+      let failures = (death.failure || 0) + (roll.isFumble ? 2 : 1);
+      details.updates = {"system.attributes.death.failure": Math.clamp(failures, 0, 3)};
+      if ( failures >= 3 ) {  // 3 Failures = death
+        details.chatString = "NAHEULBEUK.DeathSaveFailure";
+      }
+    }
+
+    /**
+     * A hook event that fires after a death saving throw has been rolled for an Actor, but before
+     * updates have been performed.
+     * @function naheulbeuk.rollDeathSave
+     * @memberof hookEvents
+     * @param {D20Roll[]} rolls         The resulting rolls.
+     * @param {object} data
+     * @param {string} data.chatString  Localizable string displayed in the create chat message. If not set, then
+     *                                  no chat message will be displayed.
+     * @param {object} data.updates     Updates that will be applied to the actor as a result of this save.
+     * @param {ActorNaheulbeuk} data.subject    Actor for which the death saving throw has been rolled.
+     * @returns {boolean}               Explicitly return `false` to prevent updates from being performed.
+     */
+    if ( Hooks.call("naheulbeuk.rollDeathSave", rolls, details) === false ) return returnValue;
+    if ( Hooks.call("naheulbeuk.rollDeathSaveV2", rolls, details) === false ) return returnValue;
+
+    if ( !foundry.utils.isEmpty(details.updates) ) await this.update(details.updates);
+
+    // Display success/failure chat message
+    let resultsMessage;
+    if ( details.chatString ) {
+      const chatData = {
+        content: game.i18n.format(details.chatString, { name: this.name }),
+        speaker: messageConfig.speaker ?? ChatMessage.getSpeaker({ actor: this })
+      };
+      ChatMessage.applyRollMode(chatData, messageConfig.rollMode ?? game.settings.get("core", "rollMode"));
+      resultsMessage = await ChatMessage.create(chatData);
+    }
+
+    /**
+     * A hook event that fires after a death saving throw has been rolled and after changes have been applied.
+     * @function naheulbeuk.postRollDeathSave
+     * @memberof hookEvents
+     * @param {D20Roll[]} rolls                  The resulting rolls.
+     * @param {object} data
+     * @param {ChatMessageNaheulbeuk|void} data.message  The created results chat message.
+     * @param {ActorNaheulbeuk} data.subject             Actor for which the death saving throw has been rolled.
+     */
+    Hooks.callAll("naheulbeuk.postRollDeathSave", rolls, { message: resultsMessage, subject: this });
+
+    return returnValue;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Perform a saving throw to maintain concentration.
+   * @param {Partial<AbilityRollProcessConfiguration>} config  Configuration information for the roll.
+   * @param {Partial<BasicRollDialogConfiguration>} dialog     Configuration for the roll dialog.
+   * @param {Partial<BasicRollMessageConfiguration>} message   Configuration for the roll message.
+   * @returns {Promise<D20Roll[]|null>}                        A Promise which resolves to the created Roll instance.
+   */
+  async rollConcentration(config={}, dialog={}, message={}) {
+    let oldFormat = false;
+    if ( !this.isOwner ) return null;
+    const conc = this.system.attributes?.concentration;
+    if ( !conc ) throw new Error("You may not make a Concentration Saving Throw with this Actor.");
+
+    let data = {};
+    const parts = [];
+    const options = {
+      advantage: conc.roll.mode === CONFIG.Dice.D20Roll.ADV_MODE.ADVANTAGE,
+      disadvantage: conc.roll.mode === CONFIG.Dice.D20Roll.ADV_MODE.DISADVANTAGE,
+      maximum: conc.roll.max,
+      minimum: conc.roll.min
+    };
+
+    // Concentration bonus
+    if ( conc.bonuses.save ) parts.push(conc.bonuses.save);
+
+    const rollConfig = foundry.utils.mergeObject({
+      ability: (conc.ability in CONFIG.NAHEULBEUK.abilities) ? conc.ability : CONFIG.NAHEULBEUK.defaultAbilities.concentration,
+      isConcentration: true,
+      target: 10
+    }, config);
+    rollConfig.hookNames = [...(config.hookNames ?? []), "concentration"];
+    rollConfig.rolls = [
+      CONFIG.Dice.D20Roll.mergeConfigs({ parts, data, options }, config.rolls?.shift())
+    ].concat(config.rolls ?? []);
+
+    const dialogConfig = foundry.utils.mergeObject({
+      options: {
+        window: {
+          title: game.i18n.format("NAHEULBEUK.SavePromptTitle", { ability: game.i18n.localize("NAHEULBEUK.Concentration") })
+        }
+      }
+    }, dialog);
+
+    const messageConfig = foundry.utils.deepClone(message);
+
+    const rolls = await this.rollSavingThrow(rollConfig, dialogConfig, messageConfig);
+    if ( !rolls?.length ) return null;
+
+    /**
+     * A hook event that fires after a saving throw to maintain concentration is rolled for an Actor.
+     * @function naheulbeuk.rollConcentration
+     * @memberof hookEvents
+     * @param {D20Roll[]} rolls     The resulting rolls.
+     * @param {object} data
+     * @param {ActorNaheulbeuk} data.actor  Actor for which the saving throw has been rolled.
+     */
+    Hooks.callAll("naheulbeuk.rollConcentration", rolls, { subject: this });
+    Hooks.callAll("naheulbeuk.rollConcentrationV2", rolls, { subject: this });
+
+    return oldFormat ? rolls[0] : rolls;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Get an un-evaluated D20Roll instance used to roll initiative for this Actor.
+   * @param {Partial<InitiativeRollOptions>} options  Configuration information for the roll.
+   * @returns {D20Roll|null}                          The constructed but unevaluated D20Roll.
+   */
+  getInitiativeRoll(options={}) {
+    // Use a temporarily cached initiative roll
+    if ( this._cachedInitiativeRoll ) return this._cachedInitiativeRoll.clone();
+    const config = this.getInitiativeRollConfig(options);
+    if ( !config ) return null;
+
+    // Create a normal D20 roll
+    if ( config.options?.fixed === undefined ) {
+      const formula = ["1d20"].concat(config.parts).join(" + ");
+      return new CONFIG.Dice.D20Roll(formula, config.data, config.options);
+    }
+
+    // Create a basic roll with the fixed score
+    return new CONFIG.Dice.BasicRoll(String(config.options.fixed), config.data, config.options);
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Get an un-evaluated D20Roll instance used to roll initiative for this Actor.
+   * @param {Partial<InitiativeRollOptions>} options  Configuration information for the roll.
+   * @returns {D20RollConfiguration|null}             Roll configuration.
+   */
+  getInitiativeRollConfig(options={}) {
+    const init = this.system.attributes?.init;
+    const flags = this.flags.naheulbeuk ?? {};
+    const abilityId = init?.ability || CONFIG.NAHEULBEUK.defaultAbilities.initiative;
+    const ability = this.system.abilities?.[abilityId];
+
+    const rollData = this.getRollData();
+    let { parts, data } = CONFIG.Dice.D20Roll.constructParts({
+      mod: init?.mod,
+      prof: init.prof.hasProficiency ? init.prof.term : null,
+      initiativeBonus: init.bonus,
+      [`${abilityId}AbilityCheckBonus`]: ability?.bonuses?.check,
+      abilityCheckBonus: this.system.bonuses?.abilities?.check,
+      alert: flags.initiativeAlert && (game.settings.get("naheulbeuk", "rulesVersion") === "legacy") ? 5 : null
+    }, rollData);
+
+    const { advantage, disadvantage } = AdvantageModeField.combineFields(this.system, [
+      `abilities.${abilityId}.check.roll.mode`,
+      "attributes.init.roll.mode"
+    ]);
+
+    // Add exhaustion reduction
+    this.addRollExhaustion(parts, data);
+
+    // Ability score tiebreaker
+    const tiebreaker = game.settings.get("naheulbeuk", "initiativeDexTiebreaker");
+    if ( tiebreaker && Number.isNumeric(ability?.value) ) parts.push(String(ability.value / 100));
+
+    // Fixed initiative score
+    const scoreMode = game.settings.get("naheulbeuk", "initiativeScore");
+    const useScore = (scoreMode === "all") || ((scoreMode === "npcs") && game.user.isGM && (this.type === "npc"));
+
+    options = foundry.utils.mergeObject({
+      advantage, disadvantage,
+      fixed: useScore ? init.score : undefined,
+      flavor: options.flavor ?? game.i18n.localize("NAHEULBEUK.Initiative"),
+      halflingLucky: flags.halflingLucky ?? false,
+      maximum: Math.min(init.roll.max ?? Infinity, ability?.check.roll.max ?? Infinity),
+      minimum: Math.max(init.roll.min ?? -Infinity, ability?.check.roll.min ?? -Infinity)
+    }, options);
+
+    const rollConfig = { parts, data, options, subject: this };
+
+    /**
+     * A hook event that fires before initiative roll is prepared for an Actor.
+     * @function naheulbeuk.preConfigureInitiative
+     * @memberof hookEvents
+     * @param {ActorNaheulbeuk} subject              The Actor that is rolling initiative.
+     * @param {D20RollConfiguration} config  Configuration data for the pending roll.
+     */
+    Hooks.callAll("naheulbeuk.preConfigureInitiative", this, rollConfig);
+
+    return rollConfig;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Roll initiative for this Actor with a dialog that provides an opportunity to elect advantage or other bonuses.
+   * @param {Partial<InitiativeRollOptions>} [rollOptions={}]  Options forwarded to the Actor#getInitiativeRoll method.
+   * @returns {Promise<void>}           A promise which resolves once initiative has been rolled for the Actor.
+   */
+  async rollInitiativeDialog(rollOptions={}) {
+    const config = {
+      evaluate: false,
+      event: rollOptions.event,
+      hookNames: ["initiativeDialog", "abilityCheck", "d20Test"],
+      rolls: [this.getInitiativeRollConfig(rollOptions)],
+      subject: this
+    };
+    if ( !config.rolls[0] ) return;
+
+    // Display the roll configuration dialog
+    const messageOptions = { rollMode: game.settings.get("core", "rollMode") };
+    if ( config.rolls[0].options?.fixed === undefined ) {
+      const dialog = { options: { title: game.i18n.localize("NAHEULBEUK.InitiativeRoll") } };
+      const rolls = await CONFIG.Dice.D20Roll.build(config, dialog, messageOptions);
+      if ( !rolls.length ) return;
+      this._cachedInitiativeRoll = rolls[0];
+    }
+
+    // Just create a basic roll with the fixed score
+    else {
+      const { data, options } = config.rolls[0];
+      this._cachedInitiativeRoll = new CONFIG.Dice.BasicRoll(String(options.fixed), data, options);
+    }
+
+    await this.rollInitiative({ createCombatants: true, initiativeOptions: { messageOptions } });
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  async rollInitiative(options={}, rollOptions={}) {
+    this._cachedInitiativeRoll ??= this.getInitiativeRoll(rollOptions);
+
+    /**
+     * A hook event that fires before initiative is rolled for an Actor.
+     * @function naheulbeuk.preRollInitiative
+     * @memberof hookEvents
+     * @param {ActorNaheulbeuk} actor  The Actor that is rolling initiative.
+     * @param {D20Roll} roll   The initiative roll.
+     */
+    if ( Hooks.call("naheulbeuk.preRollInitiative", this, this._cachedInitiativeRoll) === false ) {
+      delete this._cachedInitiativeRoll;
+      return null;
+    }
+
+    const combat = await super.rollInitiative(options);
+    const combatants = this.isToken ? this.getActiveTokens(false, true).reduce((arr, t) => {
+      return arr.concat(game.combat.getCombatantsByToken(t.id));
+    }, []) : game.combat.getCombatantsByActor(this.id);
+
+    /**
+     * A hook event that fires after an Actor has rolled for initiative.
+     * @function naheulbeuk.rollInitiative
+     * @memberof hookEvents
+     * @param {ActorNaheulbeuk} actor           The Actor that rolled initiative.
+     * @param {Combatant[]} combatants  The associated Combatants in the Combat.
+     */
+    Hooks.callAll("naheulbeuk.rollInitiative", this, combatants);
+    delete this._cachedInitiativeRoll;
+    return combat;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Roll a hit die of the appropriate type, gaining hit points equal to the die roll plus your CON modifier.
+   * @param {HitDieRollProcessConfiguration} config  Configuration information for the roll.
+   * @param {BasicRollDialogConfiguration} dialog    Configuration for the roll dialog.
+   * @param {BasicRollMessageConfiguration} message  Configuration for the roll message.
+   * @returns {Promise<BasicRoll[]|null>}            The created Roll instances, or `null` if no hit die was rolled.
+   */
+  async rollHitDie(config={}, dialog={}, message={}) {
+    let formula;
+    let oldFormat = false;
+
+    let cls = null;
+
+    // NPCs only have one denomination
+    if ( this.type === "npc" ) {
+      config.denomination = `d${this.system.attributes.hd.denomination}`;
+
+      // If no hit dice are available, display an error notification
+      if ( !this.system.attributes.hd.value ) {
+        ui.notifications.error(game.i18n.format("NAHEULBEUK.HitDiceNPCWarn", {name: this.name}));
+        return null;
+      }
+    }
+
+    // Otherwise check classes
+    else {
+      // If no denomination was provided, choose the first available
+      if ( !config.denomination ) {
+        cls = this.system.attributes.hd.classes.find(c => c.system.hd.value);
+        if ( !cls ) return null;
+        config.denomination = cls.system.hd.denomination;
+      }
+
+      // Otherwise, locate a class (if any) which has an available hit die of the requested denomination
+      else cls = this.system.attributes.hd.classes.find(i => {
+        return (i.system.hd.denomination === config.denomination) && i.system.hd.value;
+      });
+
+      // If no class is available, display an error notification
+      if ( !cls ) {
+        ui.notifications.error(game.i18n.format("NAHEULBEUK.HitDiceWarn", {name: this.name, formula: config.denomination}));
+        return null;
+      }
+    }
+    const rulesVersion = game.settings.get("naheulbeuk", "rulesVersion");
+    const minimumValue = rulesVersion === "modern" ? 1 : 0;
+    formula ??= `max(${minimumValue}, 1${config.denomination} + @abilities.con.mod)`;
+    const rollConfig = foundry.utils.deepClone(config);
+    rollConfig.hookNames = [...(config.hookNames ?? []), "hitDie"];
+    rollConfig.rolls = [{ parts: [formula], data: this.getRollData() }].concat(config.rolls ?? []);
+    rollConfig.subject = this;
+
+    const dialogConfig = foundry.utils.mergeObject({
+      configure: false
+    }, dialog);
+
+    const flavor = game.i18n.localize("NAHEULBEUK.HitDiceRoll");
+    const messageConfig = foundry.utils.mergeObject({
+      rollMode: game.settings.get("core", "rollMode"),
+      data: {
+        speaker: ChatMessage.implementation.getSpeaker({actor: this}),
+        flavor,
+        title: `${flavor}: ${this.name}`,
+        "flags.naheulbeuk.roll": {type: "hitDie"}
+      }
+    }, message);
+
+    const rolls = await CONFIG.Dice.BasicRoll.build(rollConfig, dialogConfig, messageConfig);
+    if ( !rolls.length ) return null;
+    const returnValue = oldFormat && rolls?.length ? rolls[0] : rolls;
+
+    const updates = { actor: {}, class: {} };
+    if ( rollConfig.modifyHitDice !== false ) {
+      if ( cls ) updates.class["system.hd.spent"] = cls.system.hd.spent + 1;
+      else updates.actor["system.attributes.hd.spent"] = this.system.attributes.hd.spent + 1;
+    }
+    const hp = this.system.attributes.hp;
+    if ( rollConfig.modifyHitPoints !== false ) {
+      const dhp = Math.min(Math.max(0, hp.effectiveMax) - hp.value, rolls.reduce((t, r) => t + r.total, 0));
+      updates.actor["system.attributes.hp.value"] = hp.value + dhp;
+    }
+
+    /**
+     * A hook event that fires after a hit die has been rolled for an Actor, but before updates have been performed.
+     * @function naheulbeuk.rollHitDie
+     * @memberof hookEvents
+     * @param {BasicRoll[]} rolls          The resulting rolls.
+     * @param {object} data
+     * @param {ActorNaheulbeuk} data.subject       Actor for which the hit die has been rolled.
+     * @param {object} data.updates
+     * @param {object} data.updates.actor  Updates that will be applied to the actor.
+     * @param {object} data.updates.class  Updates that will be applied to the class.
+     * @returns {boolean}                  Explicitly return `false` to prevent updates from being performed.
+     */
+    if ( Hooks.call("naheulbeuk.rollHitDie", rolls, { subject: this, updates }) === false ) return returnValue;
+    if ( Hooks.call("naheulbeuk.rollHitDieV2", rolls, { subject: this, updates }) === false ) return returnValue;
+
+    // Perform updates
+    if ( !foundry.utils.isEmpty(updates.actor) ) await this.update(updates.actor);
+    if ( !foundry.utils.isEmpty(updates.class) ) await cls.update(updates.class);
+
+    /**
+     * A hook event that fires after a hit die has been rolled for an Actor and updates have been performed.
+     * @function naheulbeuk.postRollHitDie
+     * @memberof hookEvents
+     * @param {BasicRoll[]} rolls     The resulting rolls.
+     * @param {object} data
+     * @param {ActorNaheulbeuk} data.subject  Actor for which the roll was performed.
+     */
+    Hooks.callAll("naheulbeuk.postRollHitDie", rolls, { subject: this });
+
+    return returnValue;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Roll hit points for a specific class as part of a level-up workflow.
+   * @param {ItemNaheulbeuk} item                         The class item whose hit dice to roll.
+   * @param {object} options
+   * @param {boolean} [options.chatMessage=true]  Display the chat message for this roll.
+   * @returns {Promise<Roll>}                     The completed roll.
+   * @see {@link naheulbeuk.preRollClassHitPoints}
+   */
+  async rollClassHitPoints(item, { chatMessage=true }={}) {
+    if ( item.type !== "class" ) throw new Error("Hit points can only be rolled for a class item.");
+    const rollData = {
+      formula: `1${item.system.hd.denomination}`,
+      data: item.getRollData(),
+      chatMessage
+    };
+    const flavor = game.i18n.format("NAHEULBEUK.ADVANCEMENT.HitPoints.Roll", { class: item.name });
+    const messageData = {
+      title: `${flavor}: ${this.name}`,
+      flavor,
+      speaker: ChatMessage.implementation.getSpeaker({ actor: this }),
+      "flags.naheulbeuk.roll": { type: "hitPoints" }
+    };
+
+    /**
+     * A hook event that fires before hit points are rolled for a character's class.
+     * @function naheulbeuk.preRollClassHitPoints
+     * @memberof hookEvents
+     * @param {ActorNaheulbeuk} actor            Actor for which the hit points are being rolled.
+     * @param {ItemNaheulbeuk} item              The class item whose hit dice will be rolled.
+     * @param {object} rollData
+     * @param {string} rollData.formula  The string formula to parse.
+     * @param {object} rollData.data     The data object against which to parse attributes within the formula.
+     * @param {object} messageData       The data object to use when creating the message.
+     */
+    Hooks.callAll("naheulbeuk.preRollClassHitPoints", this, item, rollData, messageData);
+
+    const roll = new Roll(rollData.formula, rollData.data);
+    await roll.evaluate();
+
+    /**
+     * A hook event that fires after hit points haven been rolled for a character's class.
+     * @function naheulbeuk.rollClassHitPoints
+     * @memberof hookEvents
+     * @param {ActorNaheulbeuk} actor  Actor for which the hit points have been rolled.
+     * @param {Roll} roll      The resulting roll.
+     */
+    Hooks.callAll("naheulbeuk.rollClassHitPoints", this, roll);
+
+    if ( rollData.chatMessage ) await roll.toMessage(messageData);
+    return roll;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Roll hit points for an NPC based on the HP formula.
+   * @param {object} options
+   * @param {boolean} [options.chatMessage=true]  Display the chat message for this roll.
+   * @returns {Promise<Roll>}                     The completed roll.
+   * @see {@link naheulbeuk.preRollNPCHitPoints}
+   */
+  async rollNPCHitPoints({ chatMessage=true }={}) {
+    if ( this.type !== "npc" ) throw new Error("NPC hit points can only be rolled for NPCs");
+    const rollData = {
+      formula: this.system.attributes.hp.formula,
+      data: this.getRollData(),
+      chatMessage
+    };
+    const flavor = game.i18n.format("NAHEULBEUK.HPFormulaRollMessage");
+    const messageData = {
+      title: `${flavor}: ${this.name}`,
+      flavor,
+      speaker: ChatMessage.getSpeaker({ actor: this }),
+      "flags.naheulbeuk.roll": { type: "hitPoints" }
+    };
+
+    /**
+     * A hook event that fires before hit points are rolled for an NPC.
+     * @function naheulbeuk.preRollNPCHitPoints
+     * @memberof hookEvents
+     * @param {ActorNaheulbeuk} actor            Actor for which the hit points are being rolled.
+     * @param {object} rollData
+     * @param {string} rollData.formula  The string formula to parse.
+     * @param {object} rollData.data     The data object against which to parse attributes within the formula.
+     * @param {object} messageData       The data object to use when creating the message.
+     */
+    Hooks.callAll("naheulbeuk.preRollNPCHitPoints", this, rollData, messageData);
+
+    const roll = new Roll(rollData.formula, rollData.data);
+    await roll.evaluate();
+
+    /**
+     * A hook event that fires after hit points are rolled for an NPC.
+     * @function naheulbeuk.rollNPCHitPoints
+     * @memberof hookEvents
+     * @param {ActorNaheulbeuk} actor  Actor for which the hit points have been rolled.
+     * @param {Roll} roll      The resulting roll.
+     */
+    Hooks.callAll("naheulbeuk.rollNPCHitPoints", this, roll);
+
+    if ( rollData.chatMessage ) await roll.toMessage(messageData);
+    return roll;
+  }
+
+  /* -------------------------------------------- */
+  /*  Resting                                     */
+  /* -------------------------------------------- */
+
+  /**
+   * Take a short rest, possibly spending hit dice and recovering resources, item uses, and relevant spell slots.
+   * @param {Partial<RestConfiguration>} [config]  Configuration options for a short rest.
+   * @returns {Promise<RestResult>}                A Promise which resolves once the short rest workflow has completed.
+   */
+  async shortRest(config={}) {
+    if ( this.type === "vehicle" ) return;
+    if ( !game.user.isGM && !game.settings.get("naheulbeuk", "allowRests") && !config.request ) {
+      ui.notifications.warn("NAHEULBEUK.REST.Warning.OnlyByRequest", { localize: true, log: false });
+      return;
+    }
+
+    const clone = this.clone();
+    const restConfig = CONFIG.NAHEULBEUK.restTypes.short;
+    config = foundry.utils.mergeObject({
+      type: "short", dialog: true, chat: true, newDay: false, advanceTime: false, autoHD: false, autoHDThreshold: 3,
+      duration: CONFIG.NAHEULBEUK.restTypes.short.duration[game.settings.get("naheulbeuk", "restVariant")],
+      recoverTemp: restConfig.recoverTemp, recoverTempMax: restConfig.recoverTempMax,
+      exhaustionDelta: restConfig.exhaustionDelta
+    }, config);
+
+    /**
+     * A hook event that fires before a short rest is started.
+     * @function naheulbeuk.preShortRest
+     * @memberof hookEvents
+     * @param {ActorNaheulbeuk} actor             The actor that is being rested.
+     * @param {RestConfiguration} config  Configuration options for the rest.
+     * @returns {boolean}                 Explicitly return `false` to prevent the rest from being started.
+     */
+    if ( Hooks.call("naheulbeuk.preShortRest", this, config) === false ) return;
+
+    // Take note of the initial hit points and number of hit dice the Actor has
+    const hd0 = foundry.utils.getProperty(this, "system.attributes.hd.value");
+    const hp0 = foundry.utils.getProperty(this, "system.attributes.hp.value");
+
+    // Display a Dialog for rolling hit dice
+    if ( config.dialog ) {
+      try {
+        Object.assign(config, await ShortRestDialog.configure(this, config));
+      } catch(err) { return; }
+    }
+
+    /**
+     * A hook event that fires after a short rest has started, after the configuration is complete.
+     * @function naheulbeuk.shortRest
+     * @memberof hookEvents
+     * @param {ActorNaheulbeuk} actor             The actor that is being rested.
+     * @param {RestConfiguration} config  Configuration options for the rest.
+     * @returns {boolean}                 Explicitly return `false` to prevent the rest from being continued.
+     */
+    if ( Hooks.call("naheulbeuk.shortRest", this, config) === false ) return;
+
+    // Automatically spend hit dice
+    if ( config.autoHD ) await this.autoSpendHitDice({ threshold: config.autoHDThreshold });
+
+    // Return the rest result
+    const dhd = foundry.utils.getProperty(this, "system.attributes.hd.value") - hd0;
+    const dhp = foundry.utils.getProperty(this, "system.attributes.hp.value") - hp0;
+    return this._rest(config, { clone, dhd, dhp });
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Take a long rest, recovering hit points, hit dice, resources, item uses, and spell slots.
+   * @param {Partial<RestConfiguration>} [config]  Configuration options for a long rest.
+   * @returns {Promise<RestResult>}       A Promise which resolves once the long rest workflow has completed.
+   */
+  async longRest(config={}) {
+    if ( this.type === "vehicle" ) return;
+    if ( !game.user.isGM && !game.settings.get("naheulbeuk", "allowRests") && !config.request ) {
+      ui.notifications.warn("NAHEULBEUK.REST.Warning.OnlyByRequest", { localize: true, log: false });
+      return;
+    }
+
+    const clone = this.clone();
+    const restConfig = CONFIG.NAHEULBEUK.restTypes.long;
+    config = foundry.utils.mergeObject({
+      type: "long", dialog: true, chat: true, newDay: true, advanceTime: false,
+      duration: restConfig.duration[game.settings.get("naheulbeuk", "restVariant")],
+      recoverTemp: restConfig.recoverTemp, recoverTempMax: restConfig.recoverTempMax,
+      exhaustionDelta: restConfig.exhaustionDelta
+    }, config);
+
+    /**
+     * A hook event that fires before a long rest is started.
+     * @function naheulbeuk.preLongRest
+     * @memberof hookEvents
+     * @param {ActorNaheulbeuk} actor             The actor that is being rested.
+     * @param {RestConfiguration} config  Configuration options for the rest.
+     * @returns {boolean}                 Explicitly return `false` to prevent the rest from being started.
+     */
+    if ( Hooks.call("naheulbeuk.preLongRest", this, config) === false ) return;
+
+    if ( config.dialog ) {
+      try {
+        Object.assign(config, await LongRestDialog.configure(this, config));
+      } catch(err) { return; }
+    }
+
+    /**
+     * A hook event that fires after a long rest has started, after the configuration is complete.
+     * @function naheulbeuk.longRest
+     * @memberof hookEvents
+     * @param {ActorNaheulbeuk} actor             The actor that is being rested.
+     * @param {RestConfiguration} config  Configuration options for the rest.
+     * @returns {boolean}                 Explicitly return `false` to prevent the rest from being continued.
+     */
+    if ( Hooks.call("naheulbeuk.longRest", this, config) === false ) return;
+
+    return this._rest(config, { clone });
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Handle resting an actor from a request.
+   * @param {ActorNaheulbeuk} actor                  Actor to rest.
+   * @param {ChatMessageNaheulbeuk} request          Request chat message.
+   * @param {RestConfiguration} config       Configuration data for the rest requested.
+   * @returns {Promise<ChatMessageNaheulbeuk|null>}
+   */
+  static async handleRestRequest(actor, request, config) {
+    const result = await actor[config.type === "short" ? "shortRest" : "longRest"]({
+      ...config, request, advanceBastionTurn: false, advanceTime: false
+    });
+    return result?.message ?? null;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Perform all of the changes needed for a short or long rest.
+   *
+   * @param {RestConfiguration} config         Configuration data for the rest occurring.
+   * @param {Partial<RestResult>} [result={}]  Results of the rest operation being built.
+   * @returns {Promise<RestResult|void>}       Consolidated results of the rest workflow.
+   * @private
+   */
+  async _rest(config, result={}) {
+    if ( (foundry.utils.getType(this.system.rest) === "function")
+      && (await this.system.rest(config, result) === false) ) return;
+
+    result = foundry.utils.mergeObject({
+      type: config.type,
+      deleteItems: [],
+      deltas: {
+        hitPoints: 0,
+        hitDice: 0
+      },
+      newDay: config.newDay === true,
+      request: config.request,
+      rolls: [],
+      updateData: {},
+      updateItems: []
+    }, result);
+    result.clone ??= this.clone();
+    if ( "dhp" in result ) result.deltas.hitPoints = result.dhp;
+    if ( "dhd" in result ) result.deltas.hitDice = result.dhd;
+
+    this._getRestHitDiceRecovery(config, result);
+    this._getRestHitPointRecovery(config, result);
+    this._getRestResourceRecovery(config, result);
+    this._getRestSpellRecovery(config, result);
+    await this._getRestItemUsesRecovery(config, result);
+
+    result.dhp = result.deltas.hitPoints;
+    result.dhd = result.deltas.hitDice;
+    result.longRest = result.type === "long";
+
+    if ( config.exhaustionDelta && !result.clone.hasConditionEffect("malnourished")
+      && !result.clone.hasConditionEffect("dehydrated") ) {
+      const path = "system.attributes.exhaustion";
+      const value = foundry.utils.getProperty(result.clone, path) ?? 0;
+      foundry.utils.mergeObject(result.updateData, { [path]: Math.max(0, value + config.exhaustionDelta) });
+    }
+
+    /**
+     * A hook event that fires after rest result is calculated, but before any updates are performed.
+     * @function naheulbeuk.preRestCompleted
+     * @memberof hookEvents
+     * @param {ActorNaheulbeuk} actor             The actor that is being rested.
+     * @param {RestResult} result         Details on the rest to be completed.
+     * @param {RestConfiguration} config  Configuration data for the rest occurring.
+     * @returns {boolean}                 Explicitly return `false` to prevent the rest updates from being performed.
+     */
+    if ( Hooks.call("naheulbeuk.preRestCompleted", this, result, config) === false ) return result;
+
+    // Perform updates
+    await this.update(result.updateData, { isRest: true });
+    await this.deleteEmbeddedDocuments("Item", result.deleteItems, { isRest: true });
+    await this.updateEmbeddedDocuments("Item", result.updateItems, { isRest: true });
+
+    // Advance the game clock
+    if ( config.advanceTime && (config.duration > 0) && game.user.isGM ) await game.time.advance(60 * config.duration);
+
+    // Display a Chat Message summarizing the rest effects
+    if ( config.chat ) result.message = await this._displayRestResultMessage(config, result);
+
+    /**
+     * A hook event that fires when the rest process is completed for an actor.
+     * @function naheulbeuk.restCompleted
+     * @memberof hookEvents
+     * @param {ActorNaheulbeuk} actor             The actor that just completed resting.
+     * @param {RestResult} result         Details on the rest completed.
+     * @param {RestConfiguration} config  Configuration data for that occurred.
+     */
+    Hooks.callAll("naheulbeuk.restCompleted", this, result, config);
+
+    if ( config.advanceBastionTurn && game.user.isGM && game.settings.get("naheulbeuk", "bastionConfiguration").enabled
+      && this.itemTypes.facility.length ) await naheulbeuk.bastion.advanceAllFacilities(this);
+
+    // Return data summarizing the rest effects
+    return result;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Display a chat message with the result of a rest.
+   *
+   * @param {RestConfiguration} config  Rest configuration.
+   * @param {RestResult} result         Result of the rest operation.
+   * @returns {Promise<ChatMessage>}    Chat message that was created.
+   * @protected
+   */
+  async _displayRestResultMessage(config, result) {
+    let { dhd, dhp } = result;
+    if ( config.type === "short" ) dhd *= -1;
+    const diceRestored = dhd !== 0;
+    const healthRestored = dhp !== 0;
+    const longRest = config.type === "long";
+    const length = longRest ? "Long" : "Short";
+    const typeConfig = CONFIG.NAHEULBEUK.restTypes[config.type] ?? {};
+
+    // Determine the chat message to display
+    let message;
+    if ( diceRestored && healthRestored ) message = `NAHEULBEUK.REST.${length}.Result.Full`;
+    else if ( longRest && !diceRestored && healthRestored ) message = "NAHEULBEUK.REST.Long.Result.HitPoints";
+    else if ( longRest && diceRestored && !healthRestored ) message = "NAHEULBEUK.REST.Long.Result.HitDice";
+    else message = `NAHEULBEUK.REST.${length}.Result.Short`;
+
+    // Create a chat message
+    const pr = new Intl.PluralRules(game.i18n.lang);
+    let chatData = {
+      content: game.i18n.format(message, {
+        name: this.name,
+        dice: game.i18n.format(`NAHEULBEUK.HITDICE.Counted.${pr.select(dhd)}`, { number: formatNumber(dhd) }),
+        health: game.i18n.format(`NAHEULBEUK.HITPOINTS.Counted.${pr.select(dhp)}`, { number: formatNumber(dhp) })
+      }),
+      flavor: this.createRestFlavor(config, result),
+      type: "rest",
+      rolls: result.rolls,
+      speaker: ChatMessage.getSpeaker({ actor: this, alias: this.name }),
+      system: {
+        activations: ActivationsField.getActivations(this, typeConfig?.activationPeriods ?? []),
+        deltas: ActorDeltasField.getDeltas(result.clone, {
+          actor: result.updateData, delete: result.deleteItems, item: result.updateItems
+        }),
+        request: config.request,
+        type: result.type
+      }
+    };
+    if ( config.request ) foundry.utils.setProperty(chatData, "flags.naheulbeuk.requestResult", {
+      actorUuid: this.uuid, requestId: config.request.id
+    });
+    ChatMessage.applyRollMode(chatData, game.settings.get("core", "rollMode"));
+    return ChatMessage.create(chatData);
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Generate rest flavor text based on the provided configuration.
+   * @param {RestConfiguration} config  Rest configuration.
+   * @param {RestResult} [result]       Result of the rest operation.
+   * @returns {string}
+   */
+  createRestFlavor(config, result) {
+    const typeConfig = CONFIG.NAHEULBEUK.restTypes[config.type] ?? {};
+    const duration = convertTime(config.duration, "minute");
+    const parts = [formatTime(duration.value, duration.unit)];
+    if ( result?.newDay ?? config.newDay ) parts.push(game.i18n.localize("NAHEULBEUK.REST.NewDay.Label").toLowerCase());
+    return `${typeConfig.label} (${game.i18n.getListFormatter({ type: "unit" }).format(parts)})`;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Automatically spend hit dice to recover hit points up to a certain threshold.
+   * @param {object} [options]
+   * @param {number} [options.threshold=3]  A number of missing hit points which would trigger an automatic HD roll.
+   * @returns {Promise<number>}             Number of hit dice spent.
+   */
+  async autoSpendHitDice({ threshold=3 }={}) {
+    if ( !this.system.attributes.hp ) return;
+    const hp = this.system.attributes.hp;
+    const max = Math.max(0, hp.effectiveMax);
+    let diceRolled = 0;
+    while ( (this.system.attributes.hp.value + threshold) <= max ) {
+      const r = await this.rollHitDie();
+      if ( r === null ) break;
+      diceRolled += 1;
+    }
+    return diceRolled;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Recovers class hit dice during a long rest.
+   *
+   * @param {RestConfiguration} [config]
+   * @param {number} [config.maxHitDice]  Maximum number of hit dice to recover.
+   * @param {number} [config.fraction]    Fraction of max hit dice to recover. Used for NPC recovery and for PCs if
+   *                                      `maxHitDice` isn't specified.
+   * @param {RestResult} [result={}]      Rest result being constructed.
+   * @protected
+   */
+  _getRestHitDiceRecovery({ maxHitDice, fraction, ...config }={}, result={}) {
+    const restConfig = CONFIG.NAHEULBEUK.restTypes[config.type];
+    if ( !this.system.attributes.hd || !restConfig?.recoverHitDice ) return;
+    fraction ??= game.settings.get("naheulbeuk", "rulesVersion") === "modern" ? 1 : 0.5;
+
+    // Handle simpler HD recovery for NPCs
+    if ( this.type === "npc" ) {
+      const hd = this.system.attributes.hd;
+      const recovered = Math.min(
+        Math.max(1, Math.floor(hd.max * fraction)), hd.spent, maxHitDice ?? Infinity
+      );
+      foundry.utils.mergeObject(result, {
+        deltas: {
+          hitDice: (result.deltas?.hitDice ?? 0) + recovered
+        },
+        updateData: {
+          "system.attributes.hd.spent": hd.spent - recovered
+        }
+      });
+      return;
+    }
+
+    this.system.attributes.hd.createHitDiceUpdates({ maxHitDice, fraction, ...config }, result);
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Recovers actor hit points and eliminates any temp HP.
+   * @param {RestConfiguration} [config={}]
+   * @param {boolean} [config.recoverTemp=true]     Reset temp HP to zero.
+   * @param {boolean} [config.recoverTempMax=true]  Reset temp max HP to zero.
+   * @param {RestResult} [result={}]                Rest result being constructed.
+   * @protected
+   */
+  _getRestHitPointRecovery({ recoverTemp, recoverTempMax, ...config }={}, result={}) {
+    const restConfig = CONFIG.NAHEULBEUK.restTypes[config.type ?? "long"];
+    const hp = this.system.attributes?.hp;
+    if ( !hp || !restConfig.recoverHitPoints ) return;
+
+    let max = hp.max;
+    result.updateData ??= {};
+    if ( recoverTempMax ) result.updateData["system.attributes.hp.tempmax"] = 0;
+    else max = Math.max(0, hp.effectiveMax);
+    result.updateData["system.attributes.hp.value"] = max;
+    if ( recoverTemp ) result.updateData["system.attributes.hp.temp"] = 0;
+    foundry.utils.setProperty(
+      result, "deltas.hitPoints", (result.deltas?.hitPoints ?? 0) + Math.max(0, max - hp.value)
+    );
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Recovers actor resources.
+   * @param {object} [config={}]
+   * @param {boolean} [config.recoverShortRestResources]  Recover resources that recharge on a short rest.
+   * @param {boolean} [config.recoverLongRestResources]   Recover resources that recharge on a long rest.
+   * @param {RestResult} [result={}]                      Rest result being constructed.
+   * @protected
+   */
+  _getRestResourceRecovery({recoverShortRestResources, recoverLongRestResources, ...config}={}, result={}) {
+    recoverShortRestResources ??= config.type === "short";
+    recoverLongRestResources ??= config.type === "long";
+    for ( let [k, r] of Object.entries(this.system.resources ?? {}) ) {
+      if ( Number.isNumeric(r.max) && ((recoverShortRestResources && r.sr) || (recoverLongRestResources && r.lr)) ) {
+        result.updateData[`system.resources.${k}.value`] = Number(r.max);
+      }
+    }
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Recovers expended spell slots.
+   * @param {RestConfiguration} [config={}]
+   * @param {boolean} [config.recoverShort]    Recover slots that return on short rests.
+   * @param {boolean} [config.recoverLong]     Recover slots that return on long rests.
+   * @param {RestResult} [result={}]           Rest result being constructed.
+   * @protected
+   */
+  _getRestSpellRecovery({ recoverShort, recoverLong, ...config }={}, result={}) {
+    const restConfig = CONFIG.NAHEULBEUK.restTypes[config.type];
+    if ( !this.system.spells ) return;
+    const types = restConfig.recoverSpellSlotTypes;
+    if ( !types?.size ) return;
+    for ( const [key, slot] of Object.entries(this.system.spells) ) {
+      if ( !types.has(slot.type) ) continue;
+      result.updateData[`system.spells.${key}.value`] = slot.max;
+    }
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Recovers item uses during short or long rests.
+   * @param {object} [config]
+   * @param {boolean} [config.recoverShortRestUses=true]  Recover uses for items that recharge after a short rest.
+   * @param {boolean} [config.recoverLongRestUses=true]   Recover uses for items that recharge after a long rest.
+   * @param {boolean} [config.recoverDailyUses=true]      Recover uses for items that recharge on a new day.
+   * @param {RestResult} [result={}]                      Rest result being constructed.
+   * @protected
+   */
+  async _getRestItemUsesRecovery({
+    recoverShortRestUses, recoverLongRestUses, recoverDailyUses, ...config
+  }={}, result={}) {
+    const restConfig = CONFIG.NAHEULBEUK.restTypes[config.type];
+    const recovery = Array.from(restConfig.recoverPeriods ?? []);
+    if ( recoverShortRestUses ) recovery.unshift("sr");
+    if ( recoverLongRestUses ) recovery.unshift("lr");
+    if ( recoverDailyUses || config.newDay ) recovery.unshift("day", "dawn", "dusk");
+
+    result.updateItems ??= [];
+    result.rolls ??= [];
+    for ( const item of this.items ) {
+      if ( (item.dependentOrigin?.active === false)
+        || (foundry.utils.getType(item.system.recoverUses) !== "function") ) continue;
+      const rollData = item.getRollData();
+      const { updates, rolls, destroy } = await item.system.recoverUses(recovery, rollData);
+      if ( destroy ) {
+        result.deleteItems.push(item.id);
+      } else if ( !foundry.utils.isEmpty(updates) ) {
+        const updateTarget = result.updateItems.find(i => i._id === item.id);
+        if ( updateTarget ) foundry.utils.mergeObject(updateTarget, updates);
+        else result.updateItems.push({ _id: item.id, ...updates });
+      }
+      result.rolls.push(...rolls);
+    }
+  }
+
+  /* -------------------------------------------- */
+  /*  Property Attribution                        */
+  /* -------------------------------------------- */
+
+  /**
+   * Format an HTML breakdown for a given property.
+   * @param {string} attribution      The property.
+   * @param {object} [options]
+   * @param {string} [options.title]  A title for the breakdown.
+   * @returns {Promise<string>}
+   */
+  async getAttributionData(attribution, { title }={}) {
+    switch ( attribution ) {
+      case "attributes.ac": return this._prepareArmorClassAttribution({ title });
+      case "attributes.movement": return this._prepareMovementAttribution();
+      default: return "";
+    }
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Prepare a movement breakdown.
+   * @returns {string}
+   * @protected
+   */
+  _prepareMovementAttribution() {
+    const { movement } = this.system.attributes;
+    const units = movement.units || defaultUnits("length");
+    const unit = CONFIG.NAHEULBEUK.movementUnits[units]?.formattingUnit;
+    const formatValue = value => `<span class="value">${
+      unit ? formatLength(value ?? 0, unit, { parts: true })
+        : `${value ?? 0} <span class="units">${units}</span>`
+    }</span>`;
+    return Object.entries(CONFIG.NAHEULBEUK.movementTypes).reduce((html, [k, { label }]) => {
+      const value = movement[k];
+      if ( value || (k === "walk") ) html += `
+        <div class="row">
+          <i class="fas ${k}"></i>
+          ${formatValue(value)}
+          <span class="label">${label}</span>
+        </div>
+      `;
+      return html;
+    }, "");
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Prepare an AC breakdown.
+   * @param {object} [options]
+   * @param {string} [options.title]  A title for the breakdown.
+   * @returns {Promise<string>}
+   * @protected
+   */
+  async _prepareArmorClassAttribution({ title }={}) {
+    const rollData = this.getRollData({ deterministic: true });
+    const ac = rollData.attributes.ac;
+    const cfg = CONFIG.NAHEULBEUK.armorClasses[ac.calc];
+    const attribution = [];
+
+    if ( ac.calc === "flat" ) {
+      attribution.push({
+        label: game.i18n.localize("NAHEULBEUK.ArmorClassFlat"),
+        mode: CONST.ACTIVE_EFFECT_MODES.OVERRIDE,
+        value: ac.flat
+      });
+      return new PropertyAttribution(this, attribution, "attributes.ac", { title }).renderTooltip();
+    }
+
+    // Base AC Attribution
+    switch ( ac.calc ) {
+
+      // Natural armor
+      case "natural":
+        attribution.push({
+          label: game.i18n.localize("NAHEULBEUK.ArmorClassNatural"),
+          mode: CONST.ACTIVE_EFFECT_MODES.OVERRIDE,
+          value: ac.flat
+        });
+        break;
+
+      default:
+        const formula = ac.calc === "custom" ? ac.formula : cfg.formula;
+        let base = ac.base;
+        const dataRgx = new RegExp(/@([a-z.0-9_-]+)/gi);
+        for ( const [match, term] of formula.matchAll(dataRgx) ) {
+          const value = String(foundry.utils.getProperty(rollData, term));
+          if ( (term === "attributes.ac.armor") || (value === "0") ) continue;
+          if ( Number.isNumeric(value) ) base -= Number(value);
+          attribution.push({
+            label: match,
+            mode: CONST.ACTIVE_EFFECT_MODES.ADD,
+            value
+          });
+        }
+        const armorInFormula = formula.includes("@attributes.ac.armor");
+        let label = game.i18n.localize("NAHEULBEUK.PropertyBase");
+        if ( armorInFormula ) label = this.armor?.name ?? game.i18n.localize("NAHEULBEUK.ArmorClassUnarmored");
+        attribution.unshift({
+          label,
+          mode: CONST.ACTIVE_EFFECT_MODES.OVERRIDE,
+          value: base
+        });
+        break;
+    }
+
+    // Shield
+    if ( ac.shield !== 0 ) attribution.push({
+      label: this.shield?.name ?? game.i18n.localize("NAHEULBEUK.EquipmentShield"),
+      mode: CONST.ACTIVE_EFFECT_MODES.ADD,
+      value: ac.shield
+    });
+
+    // Bonus
+    if ( ac.bonus !== 0 ) attribution.push(...this._prepareActiveEffectAttributions("system.attributes.ac.bonus"));
+
+    // Cover
+    if ( ac.cover !== 0 ) attribution.push({
+      label: game.i18n.localize("NAHEULBEUK.Cover"),
+      mode: CONST.ACTIVE_EFFECT_MODES.ADD,
+      value: ac.cover
+    });
+
+    if ( attribution.length ) {
+      return new PropertyAttribution(this, attribution, "attributes.ac", { title }).renderTooltip();
+    }
+
+    return "";
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Break down all of the Active Effects affecting a given target property.
+   * @param {string} target               The data property being targeted.
+   * @returns {AttributionDescription[]}  Any active effects that modify that property.
+   * @protected
+   */
+  _prepareActiveEffectAttributions(target) {
+    const rollData = this.getRollData({ deterministic: true });
+    const attributions = [];
+    for ( const e of this.allApplicableEffects() ) {
+      let source = e.sourceName;
+      if ( !e.origin || (e.origin === this.uuid) ) source = e.name;
+      if ( !source || e.disabled || e.isSuppressed ) continue;
+      const value = e.changes.reduce((n, change) => {
+        if ( (ActiveEffectNaheulbeuk.SHIM_FIELDS[change.key]?.key ?? change.key) !== target ) return n;
+        if ( change.mode !== CONST.ACTIVE_EFFECT_MODES.ADD ) return n;
+        return n + simplifyBonus(change.value, rollData);
+      }, 0);
+      if ( value ) attributions.push({ value, label: source, document: e, mode: CONST.ACTIVE_EFFECT_MODES.ADD });
+    }
+    return attributions;
+  }
+
+  /* -------------------------------------------- */
+  /*  Conversion & Transformation                 */
+  /* -------------------------------------------- */
+
+  /**
+   * Fetch stats from the original actor for data preparation.
+   * @returns {{ originalSaves: object|null, originalSkills: object|null }}
+   */
+  getOriginalStats() {
+    // Retrieve data for polymorphed actors
+    let originalSaves = null;
+    let originalSkills = null;
+    if ( this.isPolymorphed ) {
+      const transformOptions = this.flags.naheulbeuk?.transformOptions;
+      const original = game.actors?.get(this.flags.naheulbeuk?.originalActor);
+      if ( original ) {
+        if ( transformOptions.mergeSaves ) originalSaves = original.system.abilities;
+        if ( transformOptions.mergeSkills ) originalSkills = original.system.skills;
+      }
+    }
+    return { originalSaves, originalSkills };
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Transform this Actor into another one.
+   *
+   * @param {ActorNaheulbeuk} source                       The actor being transformed into.
+   * @param {TransformationSetting} [settings]     Options that determine how the transformation is performed.
+   * @param {object} [options]
+   * @param {boolean} [options.renderSheet]        Render the sheet of the transformed actor after the polymorph.
+   * @returns {Promise<Array<Token>>|null}         Updated token if the transformation was performed.
+   */
+  async transformInto(source, settings=new TransformationSetting(), options={}) {
+    // Ensure the player is allowed to polymorph
+    const allowed = game.settings.get("naheulbeuk", "allowPolymorphing");
+    if ( !allowed && !game.user.isGM ) {
+      ui.notifications.warn("NAHEULBEUK.TRANSFORM.Warning.NoPermission", { localize: true });
+      return null;
+    }
+
+    // Get the original Actor data and the new source data
+    const o = this.toObject();
+    o.flags.naheulbeuk = o.flags.naheulbeuk || {};
+    o.flags.naheulbeuk.transformOptions = {
+      ...settings.toObject(),
+      mergeSaves: settings.merge.has("saves"),
+      mergeSkills: settings.merge.has("skills")
+    };
+    const sourceData = source.toObject();
+    const rollData = { ...this.getRollData(), source: source.getRollData() };
+
+    if ( settings.keep.has("self") ) {
+      o.img = sourceData.img;
+      o.name = o.prototypeToken.name = `${o.name} (${game.i18n.localize("NAHEULBEUK.TRANSFORM.Preset.Appearance.Label")})`;
+    }
+
+    // Prepare new data to merge from the source
+    const d = foundry.utils.mergeObject(foundry.utils.deepClone({
+      type: o.type, // Remain the same actor type
+      name: `${o.name} (${sourceData.name})`, // Append the new shape to your old name
+      system: sourceData.system, // Get the systemdata model of your new form
+      items: sourceData.items, // Get the items of your new form
+      effects: o.effects.concat(sourceData.effects), // Combine active effects from both forms
+      img: sourceData.img, // New appearance
+      ownership: o.ownership, // Use the original actor permissions
+      folder: o.folder, // Be displayed in the same sidebar folder
+      flags: o.flags, // Use the original actor flags
+      prototypeToken: { name: `${o.name} (${sourceData.name})`, texture: {}, sight: {}, detectionModes: [] } // Set a new empty token
+    }), settings.keep.has("self") ? o : {}); // Keeps most of original actor
+
+    // Specifically delete some data attributes
+    delete d.system.resources; // Don't change your resource pools
+    delete d.system.currency; // Don't lose currency
+    delete d.system.bonuses; // Don't lose global bonuses
+
+    if ( settings.keep.has("spells") || settings.spellLists.size ) {
+      // Keep spellcasting ability if retaining spells.
+      d.system.attributes.spellcasting = o.system.attributes.spellcasting;
+    }
+
+    // Specific additional adjustments
+    d.system.details.alignment = o.system.details.alignment; // Don't change alignment
+    d.system.attributes.exhaustion = o.system.attributes.exhaustion; // Keep your prior exhaustion level
+    d.system.attributes.inspiration = o.system.attributes.inspiration; // Keep inspiration
+    d.system.spells = o.system.spells; // Keep spell slots
+    d.system.attributes.ac.flat = source.system.attributes.ac.value; // Override AC
+
+    // Token appearance updates
+    const tokenPropsFromSource = ["width", "height", "alpha", "lockRotation", "ring"];
+    const tokenTexturePropsFromSource = ["offsetX", "offsetY", "scaleX", "scaleY", "src", "tint"];
+    const tokenPropsFromSelf = [
+      "bar1", "bar2", "displayBars", "displayName", "disposition", "rotation", "elevation", "hidden"
+    ];
+
+    for ( const k of tokenPropsFromSource ) {
+      d.prototypeToken[k] = sourceData.prototypeToken[k];
+    }
+    for ( const k of tokenTexturePropsFromSource ) {
+      d.prototypeToken.texture[k] = sourceData.prototypeToken.texture[k];
+    }
+    for ( const k of tokenPropsFromSelf ) {
+      d.prototypeToken[k] = o.prototypeToken[k];
+    }
+
+    if ( !settings.keep.has("self") ) {
+      const sightSource = settings.keep.has("vision") ? o.prototypeToken : sourceData.prototypeToken;
+      for ( const k of ["range", "angle", "visionMode", "color", "attenuation", "brightness", "saturation", "contrast"] ) {
+        d.prototypeToken.sight[k] = sightSource.sight[k];
+      }
+      d.prototypeToken.sight.enabled = o.prototypeToken.sight.enabled;
+      d.prototypeToken.detectionModes = sightSource.detectionModes;
+
+      // Transfer ability scores
+      const abilities = d.system.abilities;
+      for ( let k of Object.keys(abilities) ) {
+        const oa = o.system.abilities[k];
+        const prof = abilities[k].proficient;
+        const type = CONFIG.NAHEULBEUK.abilities[k]?.type;
+        if ( settings.keep.has("physical") && (type === "physical") ) abilities[k] = oa;
+        else if ( settings.keep.has("mental") && (type === "mental") ) abilities[k] = oa;
+
+        // Set saving throw proficiencies.
+        if ( settings.keep.has("saves") && oa ) abilities[k].proficient = oa.proficient;
+        else if ( settings.merge.has("saves") && oa ) abilities[k].proficient = Math.max(prof, oa.proficient);
+        else abilities[k].proficient = sourceData.system.abilities[k].proficient;
+      }
+
+      // Transfer skills
+      if ( settings.keep.has("skills") ) d.system.skills = o.system.skills;
+      else if ( settings.merge.has("skills") ) {
+        for ( let [k, s] of Object.entries(d.system.skills) ) {
+          s.value = Math.max(s.value, o.system.skills[k]?.value ?? 0);
+        }
+      }
+
+      // Keep armor, weapon, & tool proficiencies
+      if ( settings.keep.has("gearProf") ) {
+        d.system.traits.armorProf = o.system.traits.armorProf;
+        d.system.traits.weaponProf = o.system.traits.weaponProf;
+        d.system.tools = o.system.tools;
+      }
+
+      // Keep languages
+      if ( settings.keep.has("languages") ) d.system.traits.languages = o.system.traits.languages;
+
+      // Keep specific items from the original data
+      const spellIdentifiers = settings.spellLists.size ? new Set(
+        Array.from(settings.spellLists)
+          .map(id => naheulbeuk.registry.spellLists.forType(id))
+          .filter(list => this.identifiedItems.get(list?.metadata.identifier, list?.metadata.type)?.size)
+          .flatMap(list => Array.from(list.identifiers))
+      ) : null;
+      const profDiff = source.system.attributes.prof - this.system.attributes.prof;
+      d.items = d.items.map(i => {
+        if ( settings.keep.has("class") && ((i.type === "feat") || (i.type === "weapon")) && profDiff ) {
+          // Items gained from the source should use the source's proficiency bonus.
+          Object.values(i.system.activities).forEach(activity => {
+            if ( activity.type === "attack" ) {
+              activity.attack.bonus ??= "";
+              activity.attack.bonus += ` ${profDiff < 0 ? "" : "+"}${profDiff}`;
+            }
+          });
+        }
+        return i;
+      }).concat(o.items.filter(i => {
+        switch ( i.type ) {
+          case "class":
+          case "subclass": return settings.keep.has("class") || settings.keep.has("hp");
+          case "feat": return settings.keep.has("feats");
+          case "spell": return spellIdentifiers?.has(i.system.identifier)
+            || (!spellIdentifiers && settings.keep.has("spells"));
+          case "race": return settings.keep.has("type");
+          default: return settings.keep.has("items");
+        }
+      }));
+
+      // Transfer classes for NPCs
+      if ( !settings.keep.has("class") && ("cr" in d.system.details) ) {
+        if ( settings.keep.has("hp") ) {
+          let profOverride = d.effects.findSplice(e => e._id === staticID("naheulbeukTransformProf"));
+          if ( !profOverride ) profOverride = new ActiveEffect.implementation({
+            _id: staticID("naheulbeukTransformProf"),
+            name: game.i18n.localize("NAHEULBEUK.Proficiency"),
+            img: "icons/skills/social/diplomacy-peace-alliance.webp",
+            disabled: false
+          }).toObject();
+          profOverride.changes = [{
+            key: "system.attributes.prof",
+            mode: CONST.ACTIVE_EFFECT_MODES.OVERRIDE,
+            value: source.system.attributes.prof
+          }];
+          d.effects.push(profOverride);
+        } else {
+          const cls = new naheulbeuk.dataModels.item.ClassData({ levels: d.system.details.cr });
+          d.items.push({
+            type: "class",
+            name: game.i18n.localize("NAHEULBEUK.TRANSFORM.TemporaryClass"),
+            system: cls.toObject()
+          });
+        }
+      }
+
+      // Keep biography
+      if ( settings.keep.has("bio") ) d.system.details.biography = o.system.details.biography;
+
+      // Keep senses
+      if ( settings.keep.has("vision") ) d.system.traits.senses = o.system.traits.senses;
+
+      // Keep creature type
+      if ( settings.keep.has("type") ) d.system.details.type = o.system.details.type;
+
+      // Keep HP & HD
+      if ( settings.keep.has("hp") ) d.system.attributes.hp = {
+        ...o.system.attributes.hp,
+        max: this.system.attributes.hp.max
+      };
+
+      // Keep damage resistances
+      if ( settings.keep.has("resistances") ) {
+        d.system.traits.di = o.system.traits.di;
+        d.system.traits.dr = o.system.traits.dr;
+        d.system.traits.dv = o.system.traits.dv;
+        d.system.traits.dm = o.system.traits.dm;
+      }
+
+      // Add temporary hit points
+      const tempHp = simplifyBonus(settings.tempFormula, rollData);
+      if ( tempHp ) d.system.attributes.hp.temp = tempHp;
+
+      // Set armor class
+      const minimumAC = simplifyBonus(settings.minimumAC, rollData);
+      if ( minimumAC > source.system.attributes.ac.value ) {
+        d.system.attributes.ac.calc = "natural";
+        d.system.attributes.ac.flat = minimumAC;
+      }
+
+      // Remove active effects
+      const oEffects = foundry.utils.deepClone(d.effects);
+      const originEffectIds = new Set(oEffects.filter(effect => {
+        return !effect.origin || effect.origin === this.uuid;
+      }).map(e => e._id));
+      d.effects = d.effects.filter(e => {
+        if ( settings.effects.has("all") ) return true;
+        if ( settings.keep.has("hp") && !settings.keep.has("class") && (e._id === staticID("naheulbeukTransformProf")) ) {
+          return true;
+        }
+        const origin = e.origin?.startsWith("Actor") || e.origin?.startsWith("Item") ? fromUuidSync(e.origin) : {};
+        const originIsSelf = origin?.parent?.uuid === this.uuid;
+        const isOriginEffect = originEffectIds.has(e._id);
+        if ( isOriginEffect ) return settings.effects.has("origin");
+        if ( !isOriginEffect && !originIsSelf ) return settings.effects.has("otherOrigin");
+        switch ( origin.type ) {
+          case "spell": return settings.effects.has("spell");
+          case "feat": return settings.effects.has("feat");
+          case "background": return settings.effects.has("background");
+          case "class":
+          case "subclass": return settings.effects.has("class");
+          case "equipment":
+          case "weapon":
+          case "tool":
+          case "loot":
+          case "container": return settings.effects.has("equipment");
+          default: return true;
+        }
+      });
+
+      // Copy favorites
+      if ( "favorites" in o.system ) d.system.favorites = o.system.favorites.filter(f => {
+        if ( !["activity", "item"].includes(f.type) ) return true;
+        const [, itemId] = foundry.utils.parseUuid(f.id, { relative: this, strict: false })?.embedded ?? [];
+        return d.items.find(i => i._id === itemId);
+      });
+    }
+
+    // Set a random image if source is configured that way
+    if ( sourceData.prototypeToken.randomImg ) {
+      const images = await source.getTokenImages();
+      d.prototypeToken.texture.src = images[Math.floor(Math.random() * images.length)];
+    }
+
+    // Set new data flags
+    if ( !this.isPolymorphed || !d.flags.naheulbeuk.originalActor ) d.flags.naheulbeuk.originalActor = this.id;
+    d.flags.naheulbeuk.isPolymorphed = true;
+
+    // Gather previous actor data
+    const previousActorIds = this.getFlag("naheulbeuk", "previousActorIds") || [];
+    previousActorIds.push(this._id);
+    foundry.utils.setProperty(d.flags, "naheulbeuk.previousActorIds", previousActorIds);
+
+    // If `renderSheet` isn't specified, only render if non-transformed sheet is open
+    options.renderSheet ??= this.sheet?.rendered ?? false;
+
+    // Update unlinked Tokens, and grab a copy of any actorData adjustments to re-apply
+    if ( this.isToken ) {
+      const tokenData = d.prototypeToken;
+      delete d.prototypeToken;
+      for ( const k of tokenPropsFromSelf ) {
+        tokenData[k] = this.token[k];
+      }
+      if ( !this.token.flags.naheulbeuk?.previousActorData ) {
+        const previousActorData = this.token.delta.toObject();
+        const previousTokenData = { texture: {} };
+        for ( const k of [...tokenPropsFromSource, ...tokenPropsFromSelf, "name"] ) {
+          previousTokenData[k] = this.token[k];
+        }
+        for ( const k of tokenTexturePropsFromSource ) {
+          previousTokenData.texture[k] = this.token.texture[k];
+        }
+        foundry.utils.setProperty(tokenData, "flags.naheulbeuk.previousActorData", previousActorData);
+        foundry.utils.setProperty(tokenData, "flags.naheulbeuk.previousTokenData", previousTokenData);
+      }
+      await this.sheet?.close();
+      const update = await this.token.update(tokenData);
+      // TODO: We have to make do with these extra server hits until #12768 or #12769 is resolved.
+      const itemIds = new Set(d.items.map(i => i._id));
+      const effectIds = new Set(d.effects.map(e => e._id));
+      // An invocation like this is the only thing that (currently) triggers correct tombstoning on the ActorDelta.
+      await this.token.actor.deleteEmbeddedDocuments("Item", o.items.reduce((ids, { _id: id }) => {
+        if ( !itemIds.has(id) ) ids.push(id);
+        return ids;
+      }, []));
+      await this.token.actor.deleteEmbeddedDocuments("ActiveEffect", o.effects.reduce((ids, { _id: id }) => {
+        if ( !effectIds.has(id) ) ids.push(id);
+        return ids;
+      }, []));
+      await this.token.actor.update(d);
+      if ( options.renderSheet ) this.sheet?.render(true);
+      return update;
+    }
+
+    // Close sheet for non-transformed Actor
+    await this.sheet?.close();
+
+    /**
+     * A hook event that fires just before the actor is transformed.
+     * @function naheulbeuk.transformActor
+     * @memberof hookEvents
+     * @param {ActorNaheulbeuk} host                    The original actor before transformation.
+     * @param {ActorNaheulbeuk} source                  The source actor into which to transform.
+     * @param {object} data                     The data that will be used to create the new transformed actor.
+     * @param {TransformationSetting} settings  Settings that determine how the transformation is performed.
+     * @param {object} options                  Rendering options passed to the actor creation.
+     */
+    Hooks.callAll("naheulbeuk.transformActor", this, source, d, settings, options);
+    Hooks.callAll("naheulbeuk.transformActorV2", this, source, d, settings, options);
+
+    // Create new Actor with transformed data
+    const newActor = await this.constructor.create(d, options);
+
+    // Update placed Token instances
+    if ( !settings.transformTokens ) return;
+    const tokens = this.getActiveTokens(true);
+    const updates = tokens.map(t => {
+      const newTokenData = foundry.utils.deepClone(d.prototypeToken);
+      newTokenData._id = t.id;
+      newTokenData.actorId = newActor.id;
+      newTokenData.actorLink = true;
+      for ( const k of tokenPropsFromSelf ) {
+        newTokenData[k] = t.document[k];
+      }
+
+      const dOriginalActor = foundry.utils.getProperty(d, "flags.naheulbeuk.originalActor");
+      foundry.utils.setProperty(newTokenData, "flags.naheulbeuk.originalActor", dOriginalActor);
+      foundry.utils.setProperty(newTokenData, "flags.naheulbeuk.isPolymorphed", true);
+      if ( !t.document.flags.naheulbeuk?.previousTokenData ) {
+        const previousTokenData = { texture: {} };
+        for ( const k of [...tokenPropsFromSource, ...tokenPropsFromSelf, "name"] ) {
+          previousTokenData[k] = t.document[k];
+        }
+        for ( const k of tokenTexturePropsFromSource ) {
+          previousTokenData.texture[k] = t.document.texture[k];
+        }
+        foundry.utils.setProperty(newTokenData, "flags.naheulbeuk.previousTokenData", previousTokenData);
+      }
+      return newTokenData;
+    });
+    return canvas.scene?.updateEmbeddedDocuments("Token", updates);
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * If this actor was transformed with transformTokens enabled, then its
+   * active tokens need to be returned to their original state. If not, then
+   * we can safely just delete this actor.
+   * @param {object} [options]
+   * @param {boolean} [options.renderSheet=true]  Render Sheet after revert the transformation.
+   * @returns {Promise<Actor>|null}  Original actor if it was reverted.
+   */
+  async revertOriginalForm(options={}) {
+    if ( !this.isPolymorphed ) return;
+    if ( !this.isOwner ) {
+      ui.notifications.warn("NAHEULBEUK.TRANSFORM.Warning.NoOwnership", { localize: true });
+      return null;
+    }
+
+    options.renderSheet ??= true;
+
+    /**
+     * A hook event that fires just before the actor is reverted to original form.
+     * @function naheulbeuk.revertOriginalForm
+     * @memberof hookEvents
+     * @param {Actor} actor                  The original actor before transformation.
+     * @param {object} options
+     * @param {boolean} options.renderSheet  Render the reverted actor sheet.
+     */
+    Hooks.callAll("naheulbeuk.revertOriginalForm", this, options);
+
+    const transformOptions = this.getFlag("naheulbeuk", "transformOptions");
+    const previousActorIds = this.getFlag("naheulbeuk", "previousActorIds") ?? [];
+    const isRendered = this.sheet.rendered;
+
+    // Obtain a reference to the original actor
+    const original = game.actors.get(this.getFlag("naheulbeuk", "originalActor"));
+
+    const update = {};
+    if ( transformOptions?.keep?.includes("hp") ) {
+      foundry.utils.setProperty(update, "system.attributes.hp.value", this.system.attributes.hp.value);
+    }
+    if ( transformOptions?.keep?.includes("tempHP") ) {
+      foundry.utils.setProperty(update, "system.attributes.hp.temp", this.system.attributes.hp.temp);
+    }
+    if ( transformOptions?.keep?.includes("spells") || transformOptions?.spellLists?.length ) {
+      Object.entries(this.system.spells ?? {}).forEach(([k, v]) => {
+        if ( v.max ) update[`system.spells.${k}.value`] = v.value;
+      });
+    }
+
+    // If we are reverting an unlinked token, grab the previous actorData, and create a new token
+    if ( this.isToken ) {
+      const baseActor = original ? original : game.actors.get(this.token.actorId);
+      if ( !baseActor ) {
+        ui.notifications.warn(game.i18n.format("NAHEULBEUK.TRANSFORM.Warning.OriginalActor", {
+          reference: this.getFlag("naheulbeuk", "originalActor")
+        }));
+        return;
+      }
+      const prototypeTokenData = (await baseActor.getTokenDocument()).toObject();
+      const actorData = this.token.getFlag("naheulbeuk", "previousActorData");
+      foundry.utils.mergeObject(actorData, update);
+      const tokenUpdate = this.token.toObject();
+      actorData._id = tokenUpdate.delta._id;
+      tokenUpdate.delta = actorData;
+
+      foundry.utils.mergeObject(tokenUpdate, this.token.getFlag("naheulbeuk", "previousTokenData"));
+      tokenUpdate.sight = prototypeTokenData.sight;
+      tokenUpdate.detectionModes = prototypeTokenData.detectionModes;
+      delete tokenUpdate.flags.naheulbeuk.previousActorData;
+      delete tokenUpdate.flags.naheulbeuk.previousTokenData;
+
+      await this.sheet.close();
+      const token = await TokenDocument.implementation.create(tokenUpdate, { parent: this.token.parent, render: true });
+      await this.token.delete({ replacements: { [this.token._id]: token.uuid } });
+      if ( isRendered && options.renderSheet ) token.actor?.sheet?.render(true);
+      return token;
+    }
+
+    if ( !original ) {
+      ui.notifications.warn(game.i18n.format("NAHEULBEUK.TRANSFORM.Warning.OriginalActor", {
+        reference: this.getFlag("naheulbeuk", "originalActor")
+      }));
+      return;
+    }
+
+    // Get the Tokens which represent this actor
+    if ( canvas.ready ) {
+      const tokens = this.getActiveTokens(true);
+      const tokenData = (await original.getTokenDocument()).toObject();
+      const tokenUpdates = tokens.map(t => {
+        const update = foundry.utils.deepClone(tokenData);
+        update._id = t.id;
+        update.elevation = t.document.elevation;
+        update.hidden = t.document.hidden;
+        update.rotation = t.document.rotation;
+        foundry.utils.mergeObject(update, t.document.getFlag("naheulbeuk", "previousTokenData"));
+        delete update.x;
+        delete update.y;
+        return update;
+      });
+      await canvas.scene.updateEmbeddedDocuments("Token", tokenUpdates, { diff: false, recursive: false });
+    }
+
+    const polymorphedActorIds = previousActorIds.filter(id =>
+      id !== original.id // Is not original Actor Id
+      && game.actors?.get(id) // Actor still exists
+    ).concat([this.id]); // Add this id
+    // Delete the polymorphed version(s) of the actor, if possible
+    if ( game.user.isGM ) {
+      await Actor.implementation.deleteDocuments(polymorphedActorIds);
+    } else {
+      // Remove the flags
+      const actorUpdates = polymorphedActorIds.filter(id => game.actors.get(id).isOwner).map(p => {
+        return { _id: p, "flags.naheulbeuk": { "-=isPolymorphed": null, "-=previousActorIds": null } };
+      });
+      await Actor.implementation.updateDocuments(actorUpdates);
+
+      if ( isRendered ) this.sheet?.close();
+    }
+    if ( isRendered && options.renderSheet ) original.sheet?.render(isRendered);
+    if ( !foundry.utils.isEmpty(update) ) await original.update(update, { naheulbeuk: { concentrationCheck: false } });
+    return original;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Add additional system-specific sidebar directory context menu options for Actor documents
+   * @param {ApplicationV2} app   The application being displayed.
+   * @param {Array} entryOptions  The default array of context menu options
+   */
+  static addDirectoryContextOptions(app, entryOptions) {
+    if ( app instanceof foundry.applications.sidebar.apps.Compendium ) return;
+    entryOptions.push({
+      name: "NAHEULBEUK.TRANSFORM.Action.Restore",
+      icon: '<i class="fa-solid fa-backward"></i>',
+      callback: li => {
+        const actor = game.actors.get(li.dataset.documentId ?? li.dataset.entryId);
+        return actor.revertOriginalForm();
+      },
+      condition: li => {
+        const allowed = game.settings.get("naheulbeuk", "allowPolymorphing");
+        if ( !allowed && !game.user.isGM ) return false;
+        const actor = game.actors.get(li.dataset.documentId ?? li.dataset.entryId);
+        return actor && actor.isPolymorphed;
+      },
+      group: "system"
+    }, {
+      name: "NAHEULBEUK.Group.Primary.Set",
+      icon: '<i class="fa-solid fa-star"></i>',
+      callback: li => {
+        game.settings.set("naheulbeuk", "primaryParty", { actor: game.actors.get(li.dataset.documentId ?? li.dataset.entryId) });
+      },
+      condition: li => {
+        const actor = game.actors.get(li.dataset.documentId ?? li.dataset.entryId);
+        const primary = game.actors.party;
+        return game.user.isGM && (actor?.type === "group") && (actor !== primary);
+      },
+      group: "system"
+    }, {
+      name: "NAHEULBEUK.Group.Primary.Remove",
+      icon: '<i class="fa-regular fa-star"></i>',
+      callback: li => {
+        game.settings.set("naheulbeuk", "primaryParty", { actor: null });
+      },
+      condition: li => {
+        const actor = game.actors.get(li.dataset.documentId ?? li.dataset.entryId);
+        return game.user.isGM && (actor === game.actors.party);
+      },
+      group: "system"
+    });
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Add class to actor entry representing the primary group.
+   * @param {HTMLElement} html
+   */
+  static onRenderActorDirectory(html) {
+    const primaryParty = game.actors.party;
+    if ( primaryParty ) {
+      const element = html?.querySelector(`[data-entry-id="${primaryParty.id}"]`);
+      element?.classList.add("primary-party");
+    }
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Format a type object into a string.
+   * @param {object} typeData          The type data to convert to a string.
+   * @returns {string}
+   */
+  static formatCreatureType(typeData) {
+    if ( typeof typeData === "string" ) return typeData; // Backwards compatibility
+    let localizedType;
+    if ( typeData.value === "custom" ) {
+      localizedType = typeData.custom;
+    } else if ( typeData.value in CONFIG.NAHEULBEUK.creatureTypes ) {
+      const code = CONFIG.NAHEULBEUK.creatureTypes[typeData.value];
+      localizedType = game.i18n.localize(typeData.swarm ? code.plural : code.label);
+    }
+    let type = localizedType;
+    if ( typeData.swarm ) {
+      type = game.i18n.format("NAHEULBEUK.CreatureSwarmPhrase", {
+        size: game.i18n.localize(CONFIG.NAHEULBEUK.actorSizes[typeData.swarm].label),
+        type: localizedType
+      });
+    }
+    if (typeData.subtype) type = `${type} (${typeData.subtype})`;
+    return type;
+  }
+
+  /* -------------------------------------------- */
+  /*  Event Listeners and Handlers                */
+  /* -------------------------------------------- */
+
+  /** @override */
+  static async createDialog(data={}, createOptions={}, dialogOptions={}) {
+    CreateDocumentDialog.migrateOptions(createOptions, dialogOptions);
+    return CreateDocumentDialog.prompt(this, data, createOptions, dialogOptions);
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  async _onUpdate(data, options, userId) {
+    super._onUpdate(data, options, userId);
+
+    const isHpUpdate = !!data.system?.attributes?.hp;
+
+    if ( userId === game.userId ) {
+      if ( isHpUpdate ) await this.updateBloodied(options);
+      await this.updateEncumbrance(options);
+      this._onUpdateExhaustion(data, options);
+    }
+
+    const hp = options.naheulbeuk?.hp;
+    if ( isHpUpdate && hp && !options.isRest && !options.isAdvancement ) {
+      const curr = this.system.attributes.hp;
+      const changes = {
+        hp: curr.value - hp.value,
+        temp: curr.temp - hp.temp
+      };
+      changes.total = changes.hp + changes.temp;
+
+      if ( Number.isInteger(changes.total) && (changes.total !== 0) ) {
+        this._displayTokenEffect(changes);
+        if ( !game.settings.get("naheulbeuk", "disableConcentration") && (userId === game.userId)
+          && (options.naheulbeuk?.concentrationCheck !== false)
+          && (changes.total < 0) && ((changes.temp < 0) || (curr.value < curr.effectiveMax)) ) {
+          this.challengeConcentration({ dc: this.getConcentrationDC(-changes.total) });
+        }
+
+        /**
+         * A hook event that fires when an actor is damaged or healed by any means. The actual name
+         * of the hook will depend on the change in hit points.
+         * @function naheulbeuk.damageActor
+         * @memberof hookEvents
+         * @param {ActorNaheulbeuk} actor                                       The actor that had their hit points reduced.
+         * @param {{hp: number, temp: number, total: number}} changes   The changes to hit points.
+         * @param {object} update                                       The original update delta.
+         * @param {string} userId                                       Id of the user that performed the update.
+         */
+        Hooks.callAll(`naheulbeuk.${changes.total > 0 ? "heal" : "damage"}Actor`, this, changes, data, userId);
+      }
+    }
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  _onDelete(options, userId) {
+    // Remove any group sheet apps so they aren't also closed.
+    for ( const id in this.apps ) {
+      const app = this.apps[id];
+      if ( app instanceof naheulbeuk.applications.actor.GroupActorSheet ) delete this.apps[id];
+    }
+
+    super._onDelete(options, userId);
+
+    const origin = this.getFlag("naheulbeuk", "summon.origin");
+    if ( origin ) {
+      const { collection, primaryId } = foundry.utils.parseUuid(origin);
+      naheulbeuk.registry.summons.untrack(collection?.get?.(primaryId)?.uuid, this.uuid);
+    }
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  async _onCreateDescendantDocuments(parent, collection, documents, data, options, userId) {
+    if ( userId === game.userId ) {
+      if ( (collection === "effects") && documents.find(d => d.id === ActiveEffectNaheulbeuk.ID.EXHAUSTION)
+        && !this._source.system.attributes?.exhaustion ) {
+        await this.update({ "system.attributes.exhaustion": 1 });
+      }
+      if ( collection === "items" ) await this.updateEncumbrance(options);
+    }
+    super._onCreateDescendantDocuments(parent, collection, documents, data, options, userId);
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  async _onUpdateDescendantDocuments(parent, collection, documents, changes, options, userId) {
+    if ( (userId === game.userId) && (collection === "items") ) await this.updateEncumbrance(options);
+    super._onUpdateDescendantDocuments(parent, collection, documents, changes, options, userId);
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  async _onDeleteDescendantDocuments(parent, collection, documents, ids, options, userId) {
+    if ( userId === game.userId ) {
+      if ( (collection === "effects") && ids.includes(ActiveEffectNaheulbeuk.ID.EXHAUSTION) ) {
+        await this.update({ "system.attributes.exhaustion": 0 });
+      }
+      if ( collection === "items" ) await this.updateEncumbrance(options);
+      await this._clearFavorites(documents);
+    }
+    super._onDeleteDescendantDocuments(parent, collection, documents, ids, options, userId);
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Flash ring & display changes to health as scrolling combat text.
+   * @param {object} changes          Object of changes to hit points.
+   * @param {number} changes.hp       Changes to `hp.value`.
+   * @param {number} changes.temp     The change to `hp.temp`.
+   * @param {number} changes.total    The total change to hit points.
+   * @protected
+   */
+  _displayTokenEffect(changes) {
+    let key;
+    let value;
+    if ( changes.hp < 0 ) {
+      key = "damage";
+      value = changes.total;
+    } else if ( changes.hp > 0 ) {
+      key = "healing";
+      value = changes.total;
+    } else if ( changes.temp ) {
+      key = "temp";
+      value = changes.temp;
+    }
+    if ( !key || !value ) return;
+
+    const tokens = this.isToken ? [this.token] : this.getActiveTokens(true, true);
+    if ( !tokens.length ) return;
+
+    const pct = Math.clamp(Math.abs(value) / this.system.attributes.hp.max, 0, 1);
+    const fill = CONFIG.NAHEULBEUK.tokenHPColors[key];
+
+    for ( const token of tokens ) {
+      if ( !token.object?.visible || token.isSecret ) continue;
+      if ( token.hasDynamicRing ) token.flashRing(key);
+      const t = token.object;
+      canvas.interface.createScrollingText(t.center, value.signedString(), {
+        anchor: CONST.TEXT_ANCHOR_POINTS.TOP,
+        // Adapt the font size relative to the Actor's HP total to emphasize more significant blows
+        fontSize: 16 + (32 * pct), // Range between [16, 48]
+        fill: fill,
+        stroke: 0x000000,
+        strokeThickness: 4,
+        jitter: 0.25
+      });
+    }
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  async toggleStatusEffect(statusId, options) {
+    const created = await super.toggleStatusEffect(statusId, options);
+    const status = CONFIG.statusEffects.find(e => e.id === statusId);
+    if ( !(created instanceof ActiveEffect) || !status.exclusiveGroup ) return created;
+
+    const others = CONFIG.statusEffects
+      .filter(e => (e.id !== statusId) && (e.exclusiveGroup === status.exclusiveGroup) && this.effects.has(e._id));
+    if ( others.length ) await this.deleteEmbeddedDocuments("ActiveEffect", others.map(e => e._id));
+
+    return created;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * TODO: Perform this as part of Actor._preUpdateOperation instead when it becomes available in v12.
+   * Handle syncing the Actor's exhaustion level with the ActiveEffect.
+   * @param {object} data                          The Actor's update delta.
+   * @param {DocumentModificationContext} options  Additional options supplied with the update.
+   * @returns {Promise<ActiveEffect|void>}
+   * @protected
+   */
+  async _onUpdateExhaustion(data, options) {
+    const level = foundry.utils.getProperty(data, "system.attributes.exhaustion");
+    if ( !Number.isFinite(level) ) return;
+    let effect = this.effects.get(ActiveEffectNaheulbeuk.ID.EXHAUSTION);
+    if ( level < 1 ) return effect?.delete();
+    else if ( effect ) {
+      const originalExhaustion = foundry.utils.getProperty(options, "naheulbeuk.originalExhaustion");
+      return effect.update({ "flags.naheulbeuk.exhaustionLevel": level }, { naheulbeuk: { originalExhaustion } });
+    } else {
+      effect = await ActiveEffect.implementation.fromStatusEffect("exhaustion", { parent: this });
+      effect.updateSource({ "flags.naheulbeuk.exhaustionLevel": level });
+      return ActiveEffect.implementation.create(effect, { parent: this, keepId: true });
+    }
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Handle applying/removing the bloodied status.
+   * @param {DocumentModificationContext} options  Additional options supplied with the update.
+   * @returns {Promise<ActiveEffect>|void}
+   */
+  updateBloodied(options) {
+    const hp = this.system.attributes?.hp;
+    if ( !hp?.effectiveMax || (game.settings.get("naheulbeuk", "bloodied") === "none") ) return;
+
+    const effect = this.effects.get(ActiveEffectNaheulbeuk.ID.BLOODIED);
+    if ( hp.value > hp.effectiveMax * CONFIG.NAHEULBEUK.bloodied.threshold ) return effect?.delete();
+    if ( effect ) return;
+
+    return ActiveEffect.implementation.create({
+      _id: ActiveEffectNaheulbeuk.ID.BLOODIED,
+      name: game.i18n.localize(CONFIG.NAHEULBEUK.bloodied.name),
+      img: CONFIG.NAHEULBEUK.bloodied.img,
+      statuses: ["bloodied"]
+    }, { parent: this, keepId: true });
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Handle applying/removing encumbrance statuses.
+   * @param {DocumentModificationContext} options  Additional options supplied with the update.
+   * @returns {Promise<ActiveEffect>|void}
+   */
+  updateEncumbrance(options) {
+    const encumbrance = this.system.attributes?.encumbrance;
+    if ( !encumbrance || (game.settings.get("naheulbeuk", "encumbrance") === "none") ) return;
+    const statuses = [];
+    const variant = game.settings.get("naheulbeuk", "encumbrance") === "variant";
+    if ( encumbrance.value > encumbrance.thresholds.maximum ) statuses.push("exceedingCarryingCapacity");
+    if ( (encumbrance.value > encumbrance.thresholds.heavilyEncumbered) && variant ) statuses.push("heavilyEncumbered");
+    if ( (encumbrance.value > encumbrance.thresholds.encumbered) && variant ) statuses.push("encumbered");
+
+    const effect = this.effects.get(ActiveEffectNaheulbeuk.ID.ENCUMBERED);
+    if ( !statuses.length ) return effect?.delete();
+
+    const effectData = { ...CONFIG.NAHEULBEUK.encumbrance.effects[statuses[0]], statuses };
+    if ( effect ) {
+      const originalEncumbrance = effect.statuses.first();
+      return effect.update(effectData, { naheulbeuk: { originalEncumbrance } });
+    }
+
+    return ActiveEffect.implementation.create(
+      { _id: ActiveEffectNaheulbeuk.ID.ENCUMBERED, ...effectData },
+      { parent: this, keepId: true }
+    );
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Handle clearing favorited entries that were deleted.
+   * @param {Document[]} documents  The deleted Documents.
+   * @returns {Promise<ActorNaheulbeuk>|void}
+   * @protected
+   */
+  _clearFavorites(documents) {
+    if ( !("favorites" in this.system) ) return;
+    const ids = new Set(documents.map(d => d.getRelativeUUID(this)));
+    const favorites = this.system.favorites.filter(f => !ids.has(f.id));
+    return this.update({ "system.favorites": favorites });
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  static getDefaultArtwork(actorData={}) {
+    const img = CONFIG.NAHEULBEUK.defaultArtwork.Actor[actorData.type];
+    return img ? { img, texture: { src: img } } : super.getDefaultArtwork(actorData);
+  }
+
+  /* -------------------------------------------- */
+  /*  Deprecations                                */
+  /* -------------------------------------------- */
+
+  /**
+   * @deprecated since 5.1
+   * @ignore
+   */
+  static computeLeveledProgression(progression, actor, cls, spellcasting, count) {
+    foundry.utils.logCompatibilityWarning("ActorNaheulbeuk.computeLeveledProgression is deprecated. Please use "
+      + "SpellcastingModel#computeProgression instead.", { since: "Naheulbeuk 13.0", until: "Naheulbeuk 14.0" });
+    CONFIG.NAHEULBEUK.spellcasting.spell.computeProgression(progression, actor, cls, spellcasting, count);
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * @deprecated since 5.1
+   * @ignore
+   */
+  static computePactProgression(progression, actor, cls, spellcasting, count) {
+    foundry.utils.logCompatibilityWarning("ActorNaheulbeuk.computePactProgression is deprecated. Please use "
+      + "SpellcastingModel#computeProgression instead.", { since: "Naheulbeuk 13.0", until: "Naheulbeuk 14.0" });
+    CONFIG.NAHEULBEUK.spellcasting.pact.computeProgression(progression, actor, cls, spellcasting, count);
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * @deprecated since 5.1
+   * @ignore
+   */
+  static prepareAltSlots(spells, actor, progression, key, table) {
+    foundry.utils.logCompatibilityWarning("Actor.prepareAltSlots is deprecated. Please use "
+      + "SpellcastingModel#prepareSlots instead.", { since: "Naheulbeuk 13.0", until: "Naheulbeuk 14.0" });
+    const model = CONFIG.NAHEULBEUK.spellcasting[key];
+    if ( !model ) return;
+    if ( table ) model.table = table;
+    model.prepareSlots(spells, actor, progression);
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * @deprecated since 5.1
+   * @ignore
+   */
+  static prepareLeveledSlots(spells, actor, progression) {
+    foundry.utils.logCompatibilityWarning("Actor.prepareLeveledSlots is deprecated. Please use "
+      + "SpellcastingModel#prepareSlots instead.", { since: "Naheulbeuk 13.0", until: "Naheulbeuk 14.0" });
+    CONFIG.NAHEULBEUK.spellcasting.spell.prepareSlots(spells, actor, progression);
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * @deprecated since 5.1
+   * @ignore
+   */
+  static preparePactSlots(spells, actor, progression) {
+    foundry.utils.logCompatibilityWarning("Actor.preparePactSlots is deprecated. Please use "
+      + "SpellcastingModel#prepareSlots instead.", { since: "Naheulbeuk 13.0", until: "Naheulbeuk 14.0" });
+    CONFIG.NAHEULBEUK.spellcasting.pact.prepareSlots(spells, actor, progression);
+  }
+}
+
+/* -------------------------------------------- */
+
+/**
+ * @extends {Map<string, Set<ItemNaheulbeuk>>}
+ */
+class IdentifiedItemsMap extends Map {
+  /** @inheritDoc */
+  get(key, { type }={}) {
+    if ( !key ) return;
+    if ( key.includes(":") && !type ) [type, key] = key.split(":", 2);
+    const result = super.get(key);
+    if ( !result?.size || !type ) return result;
+    return result.filter(i => i.type === type);
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  set(key, value) {
+    if ( !this.has(key) ) super.set(key, new Set());
+    this.get(key).add(value);
+    return this;
+  }
+}
+
+/* -------------------------------------------- */
+
+/**
+ * @extends {Map<string, Set<ItemNaheulbeuk>>}
+ */
+class SourcedItemsMap extends Map {
+  /** @inheritDoc */
+  get(key, { remap=true }={}) {
+    if ( !key ) return;
+    if ( remap ) ({ uuid: key } = foundry.utils.parseUuid(key) ?? {});
+    return super.get(key);
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  set(key, value) {
+    const { uuid } = foundry.utils.parseUuid(key);
+    if ( !this.has(uuid) ) super.set(uuid, new Set());
+    this.get(uuid, { remap: false }).add(value);
+    return this;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Adjust keys once compendium UUID redirects have been initialized.
+   */
+  _redirectKeys() {
+    for ( const [key, value] of this.entries() ) {
+      const { uuid } = foundry.utils.parseUuid(key);
+      if ( key !== uuid ) {
+        this.set(uuid, value);
+        this.delete(key);
+      }
+    }
+  }
+}

@@ -1,3 +1,5 @@
-2024/04/20-15:45:56.574231 7fdde4fbc640 Recovering log #290
-2024/04/20-15:45:56.580218 7fdde4fbc640 Delete type=0 #290
-2024/04/20-15:45:56.580257 7fdde4fbc640 Delete type=3 #288
+2026/01/09-17:01:26.828 6cfc Recovering log #296
+2026/01/09-17:01:26.829 6cfc Level-0 table #298: started
+2026/01/09-17:01:26.851 6cfc Level-0 table #298: 369100 bytes OK
+2026/01/09-17:01:26.854 6cfc Delete type=0 #296
+2026/01/09-17:01:26.854 6cfc Delete type=3 #295

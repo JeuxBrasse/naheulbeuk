@@ -24,9 +24,28 @@
     "css/naheulbeuk.css"
   ],
   "documentTypes": {
-     "Actor": {},
+     "Actor": {
+      "character": {
+        "htmlFields": ["details.biography.value", "details.biography.public", "bastion.description"]
+      }
+     },
      "Item": {},
-     "JournalEntryPage": {}
+    "JournalEntryPage": {
+      "class": {
+        "htmlFields": [
+          "details.value",
+          "details.additionalHitPoints",
+          "description.additionalTraits",
+          "description.additionalEquipment",
+          "description.subclass"
+        ]
+      },
+      "map": {},
+      "rule": {
+        "htmlFields": ["tooltip"]
+      },
+      "spells": {}
+    }
   },
 
   "scripts": [],

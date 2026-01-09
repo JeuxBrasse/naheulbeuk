@@ -1,0 +1,67 @@
+import DocumentSheetNaheulbeuk from "../api/document-sheet.mjs";
+
+/**
+ * Application for configuring a single unlinked spell in a spell list.
+ */
+export default class SpellsUnlinkedConfig extends DocumentSheetNaheulbeuk {
+  /** @override */
+  static DEFAULT_OPTIONS = {
+    classes: ["unlinked-spell-config"],
+    form: {
+      submitOnChange: true
+    },
+    position: {
+      width: 400
+    },
+    sheetConfig: false,
+    unlinkedId: null
+  };
+
+  /* -------------------------------------------- */
+
+  /** @override */
+  static PARTS = {
+    spell: {
+      template: "systems/naheulbeuk/templates/journal/spell/unlinked-spell.hbs"
+    },
+    source: {
+      template: "systems/naheulbeuk/templates/journal/spell/unlinked-source.hbs"
+    }
+  };
+
+  /* -------------------------------------------- */
+  /*  Properties                                  */
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  get title() {
+    return game.i18n.localize("JOURNALENTRYPAGE.NAHEULBEUK.SpellList.UnlinkedSpells.Configuration");
+  }
+
+  /* -------------------------------------------- */
+  /*  Rendering                                   */
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  async _prepareContext(options) {
+    const context = {
+      ...await super._prepareContext(options),
+      ...this.document.system.unlinkedSpells.find(u => u._id === this.options.unlinkedId),
+      fields: this.document.system.schema.fields.unlinkedSpells.element.fields,
+      spellLevelOptions: Object.entries(CONFIG.NAHEULBEUK.spellLevels).map(([value, label]) => ({ value, label })),
+      spellSchoolOptions: Object.entries(CONFIG.NAHEULBEUK.spellSchools).map(([value, { label }]) => ({ value, label }))
+    };
+    return context;
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  _processFormData(event, form, formData) {
+    const submitData = super._processFormData(event, form, formData);
+    const unlinkedSpells = this.document.system.toObject().unlinkedSpells;
+    const editing = unlinkedSpells.find(s => s._id === this.options.unlinkedId);
+    foundry.utils.mergeObject(editing, submitData);
+    return { system: { unlinkedSpells: unlinkedSpells } };
+  }
+}

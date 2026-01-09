@@ -1,0 +1,952 @@
+import FormulaField from "../data/fields/formula-field.mjs";
+import MappingField from "../data/fields/mapping-field.mjs";
+import { parseOrString, staticID } from "../utils.mjs";
+import ItemNaheulbeuk from "./item.mjs";
+import DependentDocumentMixin from "./mixins/dependent.mjs";
+
+const TextEditor = foundry.applications.ux.TextEditor.implementation;
+const { ObjectField, SchemaField, SetField, StringField } = foundry.data.fields;
+
+/**
+ * @import { FavoriteDataNaheulbeuk } from "../data/abstract/_types.mjs";
+ */
+
+/**
+ * Extend the base ActiveEffect class to implement system-specific logic.
+ */
+export default class ActiveEffectNaheulbeuk extends DependentDocumentMixin(ActiveEffect) {
+  /**
+   * Static ActiveEffect ID for various conditions.
+   * @type {Record<string, string>}
+   */
+  static ID = {
+    BLOODIED: staticID("naheulbeukbloodied"),
+    ENCUMBERED: staticID("naheulbeukencumbered"),
+    EXHAUSTION: staticID("naheulbeukexhaustion")
+  };
+
+  /* -------------------------------------------- */
+
+  /**
+   * Additional key paths to properties added during base data preparation that should be treated as formula fields.
+   * @type {Set<string>}
+   */
+  static FORMULA_FIELDS = new Set([
+    "system.attributes.ac.bonus",
+    "system.attributes.ac.min",
+    "system.attributes.encumbrance.bonuses.encumbered",
+    "system.attributes.encumbrance.bonuses.heavilyEncumbered",
+    "system.attributes.encumbrance.bonuses.maximum",
+    "system.attributes.encumbrance.bonuses.overall",
+    "system.attributes.encumbrance.multipliers.encumbered",
+    "system.attributes.encumbrance.multipliers.heavilyEncumbered",
+    "system.attributes.encumbrance.multipliers.maximum",
+    "system.attributes.encumbrance.multipliers.overall",
+    "save.dc.bonus"
+  ]);
+
+  /* -------------------------------------------- */
+
+  /**
+   * Active effect fields that should be redirected to another field, optionally with a compatibility warning.
+   * Optional warning object contains options passed to `foundry.utils.logCompatibilityWarning`.
+   * @type {Record<string, { key: string, [warning]: object }>}
+   */
+  static SHIM_FIELDS = {
+    "system.attributes.movement.speed": { key: "system.attributes.movement.walk" }
+  };
+
+  /* -------------------------------------------- */
+
+  /** @inheritdoc */
+  static LOCALIZATION_PREFIXES = [...super.LOCALIZATION_PREFIXES, "NAHEULBEUK.ACTIVEEFFECT"];
+
+  /* -------------------------------------------- */
+  /*  Properties                                  */
+  /* -------------------------------------------- */
+
+  /**
+   * Another effect that granted this effect as a rider.
+   * @type {ActiveEffectNaheulbeuk|null}
+   */
+  get dependentOrigin() {
+    if ( !(this.parent instanceof ItemNaheulbeuk) ) return null;
+    return this.parent.effects.get(this.flags.naheulbeuk?.dependentOn) ?? null;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Is this effect an enchantment on an item that accepts enchantment?
+   * @type {boolean}
+   */
+  get isAppliedEnchantment() {
+    return (this.type === "enchantment") && !!this.origin && (this.origin !== this.parent.uuid);
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Should this status effect be hidden from the current user?
+   * @type {boolean}
+   */
+  get isConcealed() {
+    if ( this.target?.testUserPermission(game.user, "OBSERVER") ) return false;
+
+    // Hide bloodied status effect from players unless the token is friendly
+    if ( (this.id === this.constructor.ID.BLOODIED) && (game.settings.get("naheulbeuk", "bloodied") === "player") ) {
+      return this.target?.token?.disposition !== foundry.CONST.TOKEN_DISPOSITIONS.FRIENDLY;
+    }
+
+    return false;
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  get isSuppressed() {
+    if ( super.isSuppressed ) return true;
+    if ( this.type === "enchantment" ) return false;
+    if ( this.parent instanceof naheulbeuk.documents.ItemNaheulbeuk ) {
+      if ( this.parent.areEffectsSuppressed ) return true;
+      if ( this.dependentOrigin?.active === false ) return true;
+    }
+    return false;
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  get isTemporary() {
+    return super.isTemporary && !this.isConcealed;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Retrieve the source Actor or Item, or null if it could not be determined.
+   * @returns {Promise<ActorNaheulbeuk|ItemNaheulbeuk|null>}
+   */
+  async getSource() {
+    if ( (this.target instanceof naheulbeuk.documents.ActorNaheulbeuk) && (this.parent instanceof naheulbeuk.documents.ItemNaheulbeuk) ) {
+      return this.parent;
+    }
+    return fromUuid(this.origin);
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  static async _fromStatusEffect(statusId, { reference, ...effectData }, options) {
+    if ( !("description" in effectData) && reference ) effectData.description = `@Embed[${reference} inline]`;
+    return super._fromStatusEffect?.(statusId, effectData, options) ?? new this(effectData, options);
+  }
+
+  /* -------------------------------------------- */
+  /*  Data Migration                              */
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  _initializeSource(data, options={}) {
+    if ( data instanceof foundry.abstract.DataModel ) data = data.toObject();
+
+    if ( data.flags?.naheulbeuk?.type === "enchantment" ) {
+      data.type = "enchantment";
+      delete data.flags.naheulbeuk.type;
+      foundry.utils.setProperty(data, "flags.naheulbeuk.persistSourceMigration", true);
+    }
+
+    return super._initializeSource(data, options);
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  static migrateData(data) {
+    data = super.migrateData(data);
+    for ( const change of data.changes ?? [] ) {
+      if ( change.key === "flags.naheulbeuk.initiativeAdv" ) {
+        change.key = "system.attributes.init.roll.mode";
+        change.mode = CONST.ACTIVE_EFFECT_MODES.ADD;
+        change.value = 1;
+      }
+    }
+    return data;
+  }
+
+  /* -------------------------------------------- */
+  /*  Effect Application                          */
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  apply(doc, change) {
+    // Apply shims to moved fields
+    change = this._applyChangeShim(change);
+
+    // Ensure changes targeting flags use the proper types
+    if ( change.key.startsWith("flags.naheulbeuk.") ) change = this._prepareFlagChange(doc, change);
+
+    // Properly handle formulas that don't exist as part of the data model
+    if ( ActiveEffectNaheulbeuk.FORMULA_FIELDS.has(change.key) ) {
+      const field = new FormulaField({ deterministic: true });
+      return { [change.key]: this.constructor.applyField(doc, change, field) };
+    }
+
+    // Handle activity-targeted changes
+    if ( (change.key.startsWith("activities[") || change.key.startsWith("system.activities."))
+      && (doc instanceof Item) ) return this.applyActivity(doc, change);
+
+    return super.apply(doc, change);
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Apply a change to activities on this item.
+   * @param {ItemNaheulbeuk} item              The Item to whom this change should be applied.
+   * @param {EffectChangeData} change  The change data being applied.
+   * @returns {Record<string, *>}      An object of property paths and their updated values.
+   */
+  applyActivity(item, change) {
+    const changes = {};
+    const apply = (activity, key) => {
+      const c = this.apply(activity, { ...change, key });
+      Object.entries(c).forEach(([k, v]) => changes[`system.activities.${activity.id}.${k}`] = v);
+    };
+    if ( change.key.startsWith("system.activities.") ) {
+      const [, , id, ...keyPath] = change.key.split(".");
+      const activity = item.system.activities?.get(id);
+      if ( activity ) apply(activity, keyPath.join("."));
+    } else {
+      const { type, key } = change.key.match(/activities\[(?<type>[^\]]+)]\.(?<key>.+)/)?.groups ?? {};
+      item.system.activities?.getByType(type)?.forEach(activity => apply(activity, key));
+    }
+    return changes;
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  static applyField(model, change, field) {
+    field ??= model.schema.getField(change.key);
+    change = foundry.utils.deepClone(change);
+    const current = foundry.utils.getProperty(model, change.key);
+    const modes = CONST.ACTIVE_EFFECT_MODES;
+
+    // Replace value when using string interpolation syntax
+    if ( (field instanceof StringField) && (change.mode === modes.OVERRIDE) && change.value.includes("{}") ) {
+      change.value = change.value.replace("{}", current ?? "");
+    }
+
+    // If current value is `null`, UPGRADE & DOWNGRADE should always just set the value
+    if ( (current === null) && [modes.UPGRADE, modes.DOWNGRADE].includes(change.mode) ) change.mode = modes.OVERRIDE;
+
+    // Handle removing entries from sets
+    if ( (field instanceof SetField) && (change.mode === modes.ADD) && (foundry.utils.getType(current) === "Set") ) {
+      for ( const value of field._castChangeDelta(change.value) ) {
+        const neg = value.replace(/^\s*-\s*/, "");
+        if ( neg !== value ) current.delete(neg);
+        else current.add(value);
+      }
+      return current;
+    }
+
+    // If attempting to apply active effect to empty MappingField entry, create it
+    if ( (current === undefined) && change.key.startsWith("system.") ) {
+      let keyPath = change.key;
+      let mappingField = field;
+      while ( !(mappingField instanceof MappingField) && mappingField ) {
+        if ( mappingField.name ) keyPath = keyPath.substring(0, keyPath.length - mappingField.name.length - 1);
+        mappingField = mappingField.parent;
+      }
+      if ( mappingField && (foundry.utils.getProperty(model, keyPath) === undefined) ) {
+        const created = mappingField.model.initialize(mappingField.model.getInitialValue(), mappingField);
+        foundry.utils.setProperty(model, keyPath, created);
+      }
+    }
+
+    // Parse any JSON provided when targeting an object
+    if ( (field instanceof ObjectField) || (field instanceof SchemaField) ) {
+      change = { ...change, value: parseOrString(change.value) };
+    }
+
+    return super.applyField(model, change, field);
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  _applyAdd(actor, change, current, delta, changes) {
+    if ( current instanceof Set ) {
+      const handle = v => {
+        const neg = v.replace(/^\s*-\s*/, "");
+        if ( neg !== v ) current.delete(neg);
+        else current.add(v);
+      };
+      if ( Array.isArray(delta) ) delta.forEach(item => handle(item));
+      else if ( delta instanceof Set ) {
+        for ( const item of delta ) handle(item);
+      }
+      else handle(delta);
+      return;
+    }
+    super._applyAdd(actor, change, current, delta, changes);
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Modify the provided change according to a shim an emit a warning if required.
+   * @param {EffectChangeData} change  The change being applied.
+   * @returns {EffectChangeData}
+   * @protected
+   */
+  _applyChangeShim(change) {
+    const shim = ActiveEffectNaheulbeuk.SHIM_FIELDS[change.key];
+    if ( !shim ) return change;
+    if ( shim.warning ) foundry.utils.logCompatibilityWarning(
+      `The active effect key "${change.key}" has been deprecated and should be changed to "${shim.key}".`,
+      shim.warning
+    );
+    return { ...change, key: shim.key };
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  _applyLegacy(actor, change, changes) {
+    if ( this.system._applyLegacy?.(actor, change, changes) === false ) return;
+    super._applyLegacy(actor, change, changes);
+  }
+
+  /* --------------------------------------------- */
+
+  /** @inheritDoc */
+  _applyUpgrade(actor, change, current, delta, changes) {
+    if ( current === null ) return this._applyOverride(actor, change, current, delta, changes);
+    return super._applyUpgrade(actor, change, current, delta, changes);
+  }
+
+  /* --------------------------------------------- */
+
+  /**
+   * Transform the data type of the change to match the type expected for flags.
+   * @param {ActorNaheulbeuk} actor            The Actor to whom this effect should be applied.
+   * @param {EffectChangeData} change  The change being applied.
+   * @returns {EffectChangeData}       The change with altered types if necessary.
+   */
+  _prepareFlagChange(actor, change) {
+    const { key, value } = change;
+    const data = CONFIG.naheulbeuk.characterFlags[key.replace("flags.naheulbeuk.", "")];
+    if ( !data ) return change;
+
+    // Set flag to initial value if it isn't present
+    const current = foundry.utils.getProperty(actor, key) ?? null;
+    if ( current === null ) {
+      let initialValue = null;
+      if ( data.placeholder ) initialValue = data.placeholder;
+      else if ( data.type === Boolean ) initialValue = false;
+      else if ( data.type === Number ) initialValue = 0;
+      foundry.utils.setProperty(actor, key, initialValue);
+    }
+
+    // Coerce change data into the correct type
+    if ( data.type === Boolean ) {
+      if ( value === "false" ) change.value = false;
+      else change.value = Boolean(value);
+    }
+    return change;
+  }
+
+  /* --------------------------------------------- */
+
+  /**
+   * @deprecated
+   * @ignore
+   */
+  determineSuppression() {
+    foundry.utils.logCompatibilityWarning(
+      "The `ActiveEffectNaheulbeuk#determineSuppression` method has been deprecated and is no longer necessary to call.",
+      { since: "Naheulbeuk 13.0", until: "Naheulbeuk 14.0" }
+    );
+  }
+  /* -------------------------------------------- */
+  /*  Lifecycle                                   */
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  prepareDerivedData() {
+    super.prepareDerivedData();
+    if ( this.id === this.constructor.ID.EXHAUSTION ) this._prepareExhaustionLevel();
+    if ( this.isAppliedEnchantment && this.uuid ) naheulbeuk.registry.enchantments.track(this.origin, this.uuid);
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Modify the ActiveEffect's attributes based on the exhaustion level.
+   * @protected
+   */
+  _prepareExhaustionLevel() {
+    const config = CONFIG.NAHEULBEUK.conditionTypes.exhaustion;
+    let level = this.getFlag("naheulbeuk", "exhaustionLevel");
+    if ( !Number.isFinite(level) ) level = 1;
+    this.img = this.constructor._getExhaustionImage(level);
+    this.name = `${game.i18n.localize("NAHEULBEUK.Exhaustion")} ${level}`;
+    if ( level >= config.levels ) {
+      this.statuses.add("dead");
+      CONFIG.NAHEULBEUK.statusEffects.dead.statuses?.forEach(s => this.statuses.add(s));
+    }
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Prepare effect favorite data.
+   * @returns {Promise<FavoriteDataNaheulbeuk>}    The prepared favorite data.
+   */
+  async getFavoriteData() {
+    return {
+      img: this.img,
+      title: this.name,
+      subtitle: this.duration.remaining ? this.duration.label : "",
+      toggle: !this.disabled,
+      suppressed: this.isSuppressed
+    };
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Create conditions that are applied separately from an effect.
+   * @returns {Promise<ActiveEffectNaheulbeuk[]>}      Created rider effects.
+   */
+  async createRiderConditions() {
+    const riders = new Set();
+
+    for ( const status of this.getFlag("naheulbeuk", "riders.statuses") ?? [] ) {
+      riders.add(status);
+    }
+
+    for ( const status of this.statuses ) {
+      const r = CONFIG.statusEffects.find(e => e.id === status)?.riders ?? [];
+      for ( const p of r ) riders.add(p);
+    }
+
+    if ( !riders.size ) return [];
+
+    const createRider = async id => {
+      const existing = this.parent.effects.get(staticID(`naheulbeuk${id}`));
+      if ( existing ) return;
+      const effect = await ActiveEffectNaheulbeuk.fromStatusEffect(id);
+      return effect.toObject();
+    };
+
+    const effectData = await Promise.all(Array.from(riders).map(createRider));
+    return ActiveEffectNaheulbeuk.createDocuments(effectData.filter(_ => _), { keepId: true, parent: this.parent });
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Create additional activities, effects, and items that are applied separately from an enchantment.
+   * @param {object} options  Options passed to the effect creation.
+   */
+  async createRiderEnchantments(options={}) {
+    let item;
+    let profile;
+    const { chatMessageOrigin } = options;
+    const { enchantmentProfile, activityId } = options.naheulbeuk ?? {};
+
+    if ( chatMessageOrigin ) {
+      const message = game.messages.get(options?.chatMessageOrigin);
+      item = message?.getAssociatedItem();
+      const activity = message?.getAssociatedActivity();
+      profile = activity?.effects.find(e => e._id === message?.getFlag("naheulbeuk", "use.enchantmentProfile"));
+    } else if ( enchantmentProfile && activityId ) {
+      let activity;
+      const origin = await fromUuid(this.origin);
+      if ( origin instanceof naheulbeuk.documents.activity.EnchantActivity ) {
+        activity = origin;
+        item = activity.item;
+      } else if ( origin instanceof Item ) {
+        item = origin;
+        activity = item.system.activities?.get(activityId);
+      }
+      profile = activity?.effects.find(e => e._id === enchantmentProfile);
+    }
+
+    if ( !profile || !item ) return;
+
+    // Create Activities
+    const riderActivities = {};
+    let riderEffects = [];
+    for ( const id of profile.riders.activity ) {
+      const activityData = item.system.activities.get(id)?.toObject();
+      if ( !activityData ) continue;
+      activityData._id = foundry.utils.randomID();
+      foundry.utils.setProperty(activityData, "flags.naheulbeuk.dependentOn", this.id);
+      riderActivities[activityData._id] = activityData;
+    }
+    let createdActivities = [];
+    if ( !foundry.utils.isEmpty(riderActivities) ) {
+      await this.parent.update({ "system.activities": riderActivities });
+      createdActivities = Object.keys(riderActivities).map(id => this.parent.system.activities?.get(id));
+      createdActivities.forEach(a => a.effects?.forEach(e => {
+        if ( !this.parent.effects.has(e._id) ) riderEffects.push(item.effects.get(e._id)?.toObject());
+      }));
+    }
+
+    // Create Effects
+    riderEffects.push(...profile.riders.effect.map(id => {
+      const effectData = item.effects.get(id)?.toObject();
+      if ( effectData ) {
+        delete effectData._id;
+        delete effectData.flags?.naheulbeuk?.rider;
+        effectData.origin = this.origin;
+      }
+      return effectData;
+    }));
+    riderEffects = riderEffects.filter(_ => _);
+    riderEffects.forEach(e => foundry.utils.setProperty(e, "flags.naheulbeuk.dependentOn", this.id));
+    await this.parent.createEmbeddedDocuments("ActiveEffect", riderEffects, { keepId: true });
+
+    // Create Items
+    if ( this.parent.isEmbedded ) {
+      const riderItems = await ItemNaheulbeuk.createWithContents(
+        (await Promise.all(profile.riders.item.map(uuid => fromUuid(uuid)))).filter(_ => _), {
+          transformAll: item => {
+            const itemData = item.clone({}, { keepId: true }).toObject();
+            foundry.utils.setProperty(itemData, "flags.naheulbeuk.dependentOn", this.uuid);
+            foundry.utils.setProperty(itemData, "flags.naheulbeuk.enchantment.origin", this.uuid);
+            return itemData;
+          }
+        }
+      );
+      await this.parent.actor.createEmbeddedDocuments("Item", riderItems, { keepId: true });
+    }
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  toDragData() {
+    const data = super.toDragData();
+    const activity = this.parent?.system.activities?.getByType("enchant").find(a => {
+      return a.effects.some(e => e._id === this.id);
+    });
+    if ( activity ) data.activityId = activity.id;
+    return data;
+  }
+
+  /* -------------------------------------------- */
+  /*  Socket Event Handlers                       */
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  async _preCreate(data, options, user) {
+    if ( await super._preCreate(data, options, user) === false ) return false;
+    if ( options.keepOrigin === false ) this.updateSource({ origin: this.parent.uuid });
+
+    // Enchantments cannot be added directly to actors
+    if ( (this.type === "enchantment") && (this.parent instanceof Actor) ) {
+      ui.notifications.error("NAHEULBEUK.ENCHANTMENT.Warning.NotOnActor", { localize: true });
+      return false;
+    }
+
+    if ( this.isAppliedEnchantment ) {
+      const origin = await fromUuid(this.origin);
+      const errors = origin?.canEnchant?.(this.parent);
+      if ( errors?.length ) {
+        errors.forEach(err => console.error(err));
+        return false;
+      }
+      this.updateSource({ disabled: false });
+    }
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  async _onCreate(data, options, userId) {
+    super._onCreate(data, options, userId);
+    if ( userId === game.userId ) {
+      if ( this.active && (this.parent instanceof Actor) ) await this.createRiderConditions();
+      if ( this.isAppliedEnchantment ) await this.createRiderEnchantments(options);
+    }
+    if ( options.chatMessageOrigin ) {
+      document.body.querySelectorAll(`[data-message-id="${options.chatMessageOrigin}"] enchantment-application`)
+        .forEach(element => element.buildItemList());
+    }
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  _onUpdate(data, options, userId) {
+    super._onUpdate(data, options, userId);
+    const originalLevel = foundry.utils.getProperty(options, "naheulbeuk.originalExhaustion");
+    const newLevel = foundry.utils.getProperty(data, "flags.naheulbeuk.exhaustionLevel");
+    const originalEncumbrance = foundry.utils.getProperty(options, "naheulbeuk.originalEncumbrance");
+    const newEncumbrance = data.statuses?.[0];
+    const name = this.name;
+
+    // Display proper scrolling status effects for exhaustion
+    if ( (this.id === this.constructor.ID.EXHAUSTION) && Number.isFinite(newLevel) && Number.isFinite(originalLevel) ) {
+      if ( newLevel === originalLevel ) return;
+      // Temporarily set the name for the benefit of _displayScrollingTextStatus. We should improve this method to
+      // accept a name parameter instead.
+      if ( newLevel < originalLevel ) this.name = `Exhaustion ${originalLevel}`;
+      this._displayScrollingStatus(newLevel > originalLevel);
+      this.name = name;
+    }
+
+    // Display proper scrolling status effects for encumbrance
+    else if ( (this.id === this.constructor.ID.ENCUMBERED) && originalEncumbrance && newEncumbrance ) {
+      if ( newEncumbrance === originalEncumbrance ) return;
+      const increase = !originalEncumbrance || ((originalEncumbrance === "encumbered") && newEncumbrance)
+        || (newEncumbrance === "exceedingCarryingCapacity");
+      if ( !increase ) this.name = CONFIG.NAHEULBEUK.encumbrance.effects[originalEncumbrance].name;
+      this._displayScrollingStatus(increase);
+      this.name = name;
+    }
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  async _preDelete(options, user) {
+    const dependents = this.getDependents();
+    if ( dependents.length && !game.users.activeGM ) {
+      ui.notifications.warn("NAHEULBEUK.ConcentrationBreakWarning", { localize: true });
+      return false;
+    }
+    return super._preDelete(options, user);
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  _onDelete(options, userId) {
+    super._onDelete(options, userId);
+    if ( game.user === game.users.activeGM ) this.getDependents().forEach(e => e.delete());
+    if ( this.isAppliedEnchantment ) naheulbeuk.registry.enchantments.untrack(this.origin, this.uuid);
+    document.body.querySelectorAll(`enchantment-application:has([data-enchantment-uuid="${this.uuid}"]`)
+      .forEach(element => element.buildItemList());
+  }
+
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  _displayScrollingStatus(enabled) {
+    if ( this.isConcealed ) return;
+    super._displayScrollingStatus(enabled);
+  }
+
+  /* -------------------------------------------- */
+  /*  Exhaustion and Concentration Handling       */
+  /* -------------------------------------------- */
+
+  /**
+   * Create effect data for concentration on an actor.
+   * @param {Activity} activity  The Activity on which to begin concentrating.
+   * @param {object} [data]      Additional data provided for the effect instance.
+   * @returns {object}           Created data for the ActiveEffect.
+   */
+  static createConcentrationEffectData(activity, data={}) {
+    const item = activity?.item;
+    if ( !item?.isEmbedded || !activity.duration.concentration ) {
+      throw new Error("You may not begin concentrating on this item!");
+    }
+
+    const statusEffect = CONFIG.statusEffects.find(e => e.id === CONFIG.specialStatusEffects.CONCENTRATING);
+    const effectData = foundry.utils.mergeObject({
+      ...statusEffect,
+      name: `${game.i18n.localize("EFFECT.NAHEULBEUK.StatusConcentrating")}: ${item.name}`,
+      description: `<p>${game.i18n.format("NAHEULBEUK.ConcentratingOn", {
+        name: item.name,
+        type: game.i18n.localize(`TYPES.Item.${item.type}`)
+      })}</p><hr><p>@Embed[${item.uuid} inline]</p>`,
+      duration: activity.duration.getEffectData(),
+      "flags.naheulbeuk": {
+        activity: {
+          type: activity.type, id: activity.id, uuid: activity.uuid
+        },
+        item: {
+          type: item.type, id: item.id, uuid: item.uuid,
+          data: !item.actor.items.has(item.id) ? item.toObject() : undefined
+        }
+      },
+      origin: item.uuid,
+      statuses: [statusEffect.id].concat(statusEffect.statuses ?? [])
+    }, data, {inplace: false});
+    delete effectData.id;
+    if ( item.type === "spell" ) effectData["flags.naheulbeuk.spellLevel"] = item.system.level;
+
+    return effectData;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Register listeners for custom handling in the TokenHUD.
+   */
+  static registerHUDListeners() {
+    Hooks.on("renderTokenHUD", this.onTokenHUDRender);
+    document.addEventListener("click", this.onClickTokenHUD.bind(this), { capture: true });
+    document.addEventListener("contextmenu", this.onClickTokenHUD.bind(this), { capture: true });
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Add modifications to the core ActiveEffect config.
+   * @param {ActiveEffectConfig} app           The ActiveEffect config.
+   * @param {HTMLElement} html                 The ActiveEffect config element.
+   * @param {ApplicationRenderContext} context The app's rendering context.
+   */
+  static onRenderActiveEffectConfig(app, html, context) {
+    const element = new foundry.data.fields.SetField(new foundry.data.fields.StringField(), {}).toFormGroup({
+      label: game.i18n.localize("NAHEULBEUK.CONDITIONS.RiderConditions.label"),
+      hint: game.i18n.localize("NAHEULBEUK.CONDITIONS.RiderConditions.hint")
+    }, {
+      name: "flags.naheulbeuk.riders.statuses",
+      value: app.document.getFlag("naheulbeuk", "riders.statuses") ?? [],
+      options: CONFIG.statusEffects.map(se => ({ value: se.id, label: se.name })),
+      disabled: !context.editable
+    });
+    html.querySelector("[data-tab=details] > .form-group:has([name=statuses])")?.after(element);
+
+    // Add tooltip with link to wiki for effects/enchantments
+    const helpIconElement = document.createElement("i");
+    helpIconElement.classList.add("fa-solid", "fa-circle-question");
+    const tooltipText = game.i18n.format("NAHEULBEUK.ACTIVEEFFECT.AttributeKeyTooltip", {
+      url: app.document.type === "enchantment"
+        ? "https://github.com/foundryvtt/dnd5e/wiki/Enchantment"
+        : "https://github.com/foundryvtt/dnd5e/wiki/Active-Effect-Guide"
+    });
+    Object.assign(helpIconElement.dataset, { tooltip: tooltipText, tooltipDirection: "RIGHT", locked: "" });
+    const targetElement = html.querySelector("section:is([data-tab='effects'], [data-tab='changes']) .key");
+    if ( targetElement ) targetElement.insertAdjacentElement("beforeend", helpIconElement);
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Adjust exhaustion icon display to match current level.
+   * @param {Application} app   The TokenHUD application.
+   * @param {HTMLElement} html  The TokenHUD HTML.
+   */
+  static onTokenHUDRender(app, html) {
+    const actor = app.object.actor;
+    const level = foundry.utils.getProperty(actor, "system.attributes.exhaustion");
+    if ( Number.isFinite(level) && (level > 0) ) {
+      const img = ActiveEffectNaheulbeuk._getExhaustionImage(level);
+      const elem = html.querySelector('[data-status-id="exhaustion"]');
+      if ( elem ) {
+        elem.style.objectPosition = "-100px";
+        elem.style.background = `url('${img}') no-repeat center / contain`;
+      }
+    }
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Get the image used to represent exhaustion at this level.
+   * @param {number} level
+   * @returns {string}
+   */
+  static _getExhaustionImage(level) {
+    const { img } = CONFIG.NAHEULBEUK.conditionTypes.exhaustion;
+    const split = img.split(".");
+    const ext = split.pop();
+    const path = split.join(".");
+    return `${path}-${level}.${ext}`;
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Implement custom behavior for select conditions on the token HUD.
+   * @param {PointerEvent} event        The triggering event.
+   */
+  static onClickTokenHUD(event) {
+    const { target } = event;
+    if ( !target.classList?.contains("effect-control") ) return;
+
+    const actor = canvas.hud.token.object?.actor;
+    if ( !actor ) return;
+
+    const id = target.dataset?.statusId;
+    if ( id === "exhaustion" ) ActiveEffectNaheulbeuk._manageExhaustion(event, actor);
+    else if ( id === "concentrating" ) ActiveEffectNaheulbeuk._manageConcentration(event, actor);
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Manage custom exhaustion cycling when interacting with the token HUD.
+   * @param {PointerEvent} event        The triggering event.
+   * @param {ActorNaheulbeuk} actor             The actor belonging to the token.
+   */
+  static _manageExhaustion(event, actor) {
+    let level = foundry.utils.getProperty(actor, "system.attributes.exhaustion");
+    if ( !Number.isFinite(level) ) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if ( event.button === 0 ) level++;
+    else level--;
+    const max = CONFIG.NAHEULBEUK.conditionTypes.exhaustion.levels;
+    actor.update({ "system.attributes.exhaustion": Math.clamp(level, 0, max) });
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Manage custom concentration handling when interacting with the token HUD.
+   * @param {PointerEvent} event        The triggering event.
+   * @param {ActorNaheulbeuk} actor             The actor belonging to the token.
+   */
+  static _manageConcentration(event, actor) {
+    const { effects } = actor.concentration;
+    if ( effects.size < 1 ) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if ( effects.size === 1 ) {
+      actor.endConcentration(effects.first());
+      return;
+    }
+    const choices = effects.reduce((acc, effect) => {
+      const data = effect.getFlag("naheulbeuk", "item");
+      acc[effect.id] = data?.name ?? actor.items.get(data?.id)?.name ?? game.i18n.localize("NAHEULBEUK.ConcentratingItemless");
+      return acc;
+    }, {});
+    const options = HandlebarsHelpers.selectOptions(choices, { hash: { sort: true } });
+    const content = `
+    <p>${game.i18n.localize("NAHEULBEUK.ConcentratingEndChoice")}</p>
+    <div class="form-group">
+      <label>${game.i18n.localize("NAHEULBEUK.SOURCE.FIELDS.source.label")}</label>
+      <div class="form-fields">
+        <select name="source">${options}</select>
+      </div>
+    </div>`;
+    foundry.applications.api.Dialog.prompt({
+      content,
+      window: { title: game.i18n.localize("NAHEULBEUK.Concentration") },
+      ok: {
+        label: game.i18n.localize("NAHEULBEUK.Confirm"),
+        callback: (event, button, dialog) => {
+          const source = new foundry.applications.ux.FormDataExtended(button.form).object.source;
+          if ( source ) actor.endConcentration(source);
+        }
+      }
+    });
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Record another effect as a dependent of this one.
+   * @param {...ActiveEffectNaheulbeuk} dependent  One or more dependent effects.
+   * @returns {Promise<ActiveEffectNaheulbeuk>}
+   */
+  addDependent(...dependent) {
+    foundry.utils.logCompatibilityWarning(
+      "Dependent documents are now tracked using the `dependentOn` flag on the document itself.",
+      { since: "Naheulbeuk 13.0", until: "Naheulbeuk 14.0", once: true }
+    );
+    return Promise.all(dependent.map(d => d.setFlag("naheulbeuk", "dependentOn", this.uuid))).then(() => this);
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Retrieve a list of dependent effects.
+   * @returns {Array<ActiveEffectNaheulbeuk|ItemNaheulbeuk>}
+   */
+  getDependents() {
+    const actor = this.parent instanceof Actor ? this.parent : this.parent?.parent;
+    const item = this.parent instanceof Item ? this.parent : null;
+    return (this.getFlag("naheulbeuk", "dependents") || []).reduce((arr, { uuid }) => {
+      let doc;
+      // TODO: Remove this special casing once https://github.com/foundryvtt/foundryvtt/issues/11214 is resolved
+      if ( this.parent.pack && uuid.includes(this.parent.uuid) ) {
+        const [, embeddedName, id] = uuid.replace(this.parent.uuid, "").split(".");
+        doc = this.parent.getEmbeddedDocument(embeddedName, id);
+      }
+      else doc = fromUuidSync(uuid, { strict: false });
+      if ( doc ) {
+        const otherActor = doc.parent instanceof Actor ? doc.parent : doc.parent?.parent;
+        const otherItem = doc.parent instanceof Item ? doc.parent : null;
+        if ( ((doc instanceof ActiveEffect) && (doc.origin === this.uuid))
+          || ((actor && (actor === otherActor)) || (item && (item === otherItem)))) arr.push(doc);
+      }
+      return arr;
+    }, []).concat(naheulbeuk.registry.dependents.get(this));
+  }
+
+  /* -------------------------------------------- */
+  /*  Helpers                                     */
+  /* -------------------------------------------- */
+
+  /**
+   * Helper method to add choices that have been overridden by an active effect. Used to determine what fields might
+   * need to be disabled because they are overridden by an active effect in a way not easily determined by looking at
+   * the `Document#overrides` data structure.
+   * @param {ActorNaheulbeuk|ItemNaheulbeuk} doc  Document from which to determine the overrides.
+   * @param {string} prefix       The initial form prefix under which the choices are grouped.
+   * @param {string} path         Path in document data.
+   * @param {string[]} overrides  The list of fields that are currently modified by Active Effects. *Will be mutated.*
+   */
+  static addOverriddenChoices(doc, prefix, path, overrides) {
+    const source = new Set(foundry.utils.getProperty(doc._source, path) ?? []);
+    const current = foundry.utils.getProperty(doc, path) ?? new Set();
+    const delta = current.symmetricDifference(source);
+    for ( const choice of delta ) overrides.push(`${prefix}.${choice}`);
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Render a rich tooltip for this effect.
+   * @param {EnrichmentOptions} [enrichmentOptions={}]  Options for text enrichment.
+   * @returns {Promise<{content: string, classes: string[]}>}
+   */
+  async richTooltip(enrichmentOptions={}) {
+    const properties = [];
+    if ( this.isSuppressed ) properties.push("NAHEULBEUK.EffectType.Unavailable");
+    else if ( this.disabled ) properties.push("NAHEULBEUK.EffectType.Inactive");
+    else if ( this.isTemporary ) properties.push("NAHEULBEUK.EffectType.Temporary");
+    else properties.push("NAHEULBEUK.EffectType.Passive");
+    if ( this.type === "enchantment" ) properties.push("NAHEULBEUK.ENCHANTMENT.Label");
+    return {
+      content: await foundry.applications.handlebars.renderTemplate(
+        "systems/naheulbeuk/templates/effects/parts/effect-tooltip.hbs", {
+          effect: this,
+          description: await TextEditor.enrichHTML(this.description ?? "", { relativeTo: this, ...enrichmentOptions }),
+          durationParts: this.duration.remaining ? this.duration.label.split(", ") : [],
+          properties: properties.map(p => game.i18n.localize(p))
+        }
+      ),
+      classes: ["naheulbeuk", "naheulbeuk-tooltip", "effect-tooltip", "themed", "theme-light"]
+    };
+  }
+
+  /* -------------------------------------------- */
+
+  /** @override */
+  async deleteDialog(dialogOptions={}, operation={}) {
+    const type = game.i18n.localize(this.constructor.metadata.label);
+    return foundry.applications.api.DialogV2.confirm(foundry.utils.mergeObject({
+      window: { title: `${game.i18n.format("DOCUMENT.Delete", { type })}: ${this.name}` },
+      position: { width: 400 },
+      content: `
+        <p>
+            <strong>${game.i18n.localize("AreYouSure")}</strong> ${game.i18n.format("SIDEBAR.DeleteWarning", { type })}
+        </p>
+      `,
+      yes: { callback: () => this.delete(operation) }
+    }, dialogOptions));
+  }
+}

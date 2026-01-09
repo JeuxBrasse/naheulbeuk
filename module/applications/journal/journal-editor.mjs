@@ -1,0 +1,67 @@
+import DocumentSheetNaheulbeuk from "../api/document-sheet.mjs";
+
+const TextEditor = foundry.applications.ux.TextEditor.implementation;
+
+/**
+ * @import { JournalEditorConfiguration } from "./_types.mjs";
+ */
+
+/**
+ * Pop out ProseMirror editor window for journal entries with multiple text areas that need editing.
+ * @extends {DocumentSheetNaheulbeuk<ApplicationConfiguration & JournalEditorConfiguration>}
+ */
+export default class JournalEditor extends DocumentSheetNaheulbeuk {
+
+  /** @override */
+  static DEFAULT_OPTIONS = {
+    classes: ["journal-editor", "naheulbeuk2-journal", "titlebar", "dialog-lg"],
+    window: {
+      resizable: true
+    },
+    form: {
+      submitOnChange: true
+    },
+    position: {
+      width: 550,
+      height: 640
+    },
+    sheetConfig: false,
+    textKeyPath: null
+  };
+
+  /* -------------------------------------------- */
+
+  /** @override */
+  static PARTS = {
+    editor: {
+      template: "systems/naheulbeuk/templates/journal/journal-editor.hbs"
+    }
+  };
+
+  /* -------------------------------------------- */
+  /*  Properties                                  */
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  get title() {
+    return this.options.window.title ?? this.document.name;
+  }
+
+  /* -------------------------------------------- */
+  /*  Rendering                                   */
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  async _prepareContext(options) {
+    const context = await super._prepareContext(options);
+    const rawText = foundry.utils.getProperty(this.document, this.options.textKeyPath) ?? "";
+    return foundry.utils.mergeObject(context, {
+      document: this.document,
+      enriched: await TextEditor.enrichHTML(rawText, {
+        relativeTo: this.document, secrets: this.document.isOwner
+      }),
+      keyPath: this.options.textKeyPath,
+      source: rawText
+    });
+  }
+}

@@ -1,0 +1,58 @@
+import SystemDataModel from "../../abstract/system-data-model.mjs";
+import AdvancementField from "../../fields/advancement-field.mjs";
+
+const { ArrayField } = foundry.data.fields;
+
+/**
+ * @import { AdvancementTemplateData } from "./_types.mjs";
+ */
+
+/**
+ * Data model template for items with advancement.
+ * @extends {SystemDataModel<AdvancementTemplateData>}
+ * @mixin
+ */
+export default class AdvancementTemplate extends SystemDataModel {
+  /** @inheritDoc */
+  static defineSchema() {
+    return {
+      advancement: new ArrayField(new AdvancementField(), { label: "NAHEULBEUK.AdvancementTitle" })
+    };
+  }
+
+  /* -------------------------------------------- */
+  /*  Socket Event Handlers                       */
+  /* -------------------------------------------- */
+
+  /**
+   * If no advancement data exists on the item, create some default advancement.
+   * @param {object} data     The initial data object provided to the document creation request.
+   * @param {object} options  Additional options which modify the creation request.
+   */
+  async preCreateAdvancement(data, options) {
+    if ( data._id || foundry.utils.hasProperty(data, "system.advancement") ) return;
+    const toCreate = this._advancementToCreate(options);
+    if ( toCreate.length ) this.parent.updateSource({
+      "system.advancement": toCreate.map(c => {
+        const baseData = foundry.utils.deepClone(c);
+        const config = CONFIG.NAHEULBEUK.advancementTypes[c.type];
+        const cls = config.documentClass ?? config;
+        const advancement = new cls(c, { parent: this.parent });
+        if ( advancement._preCreate(baseData) === false ) return null;
+        return advancement.toObject();
+      }).filter(_ => _)
+    });
+  }
+
+  /* -------------------------------------------- */
+
+  /**
+   * Create a list of advancement data to be created on new items of this type.
+   * @param {object} options  Additional options which modify the creation request.
+   * @returns {object[]}
+   * @protected
+   */
+  _advancementToCreate(options) {
+    return [];
+  }
+}

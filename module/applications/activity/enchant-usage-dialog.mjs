@@ -1,0 +1,47 @@
+import ActivityUsageDialog from "./activity-usage-dialog.mjs";
+
+const { StringField } = foundry.data.fields;
+
+/**
+ * Dialog for configuring the usage of an activity.
+ */
+export default class EnchantUsageDialog extends ActivityUsageDialog {
+
+  /** @inheritDoc */
+  static PARTS = {
+    ...super.PARTS,
+    creation: {
+      template: "systems/naheulbeuk/templates/activity/enchant-usage-creation.hbs"
+    }
+  };
+
+  /* -------------------------------------------- */
+  /*  Rendering                                   */
+  /* -------------------------------------------- */
+
+  /** @inheritDoc */
+  async _prepareCreationContext(context, options) {
+    context = await super._prepareCreationContext(context, options);
+
+    const enchantments = this.activity.availableEnchantments;
+    if ( (enchantments.length > 1) && this._shouldDisplay("create.enchantment") ) {
+      const existingProfile = this.activity.existingEnchantment?.flags.naheulbeuk?.enchantmentProfile;
+      context.hasCreation = true;
+      context.enchantment = {
+        field: new StringField({ required: true, blank: false, label: game.i18n.localize("NAHEULBEUK.ENCHANTMENT.Label") }),
+        name: "enchantmentProfile",
+        value: this.config.enchantmentProfile,
+        options: enchantments.map(e => ({
+          value: e._id,
+          label: e._id === existingProfile
+            ? game.i18n.format("NAHEULBEUK.ENCHANT.Enchantment.Active", { name: e.effect.name })
+            : e.effect.name
+        }))
+      };
+    } else if ( enchantments.length ) {
+      context.enchantment = enchantments[0]?._id ?? false;
+    }
+
+    return context;
+  }
+}

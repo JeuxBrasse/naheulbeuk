@@ -7,7 +7,7 @@
 
 // Import Configuration
 // 
-import { NAHEULBEUK } from "./module/config.mjs";
+import NAHEULBEUK from "./module/config.mjs";
 import {
   registerSystemKeybindings, registerSystemSettings
 } from "./module/settings.mjs";
@@ -21,10 +21,12 @@ import * as documents from "./module/documents/_module.mjs";
 import * as enrichers from "./module/enrichers.mjs";
 import * as Filter from "./module/filter.mjs";
 import * as migrations from "./module/migration.mjs";
+import ModuleArt from "./module/module-art.mjs";
 import { registerModuleData, registerModuleRedirects, setupModulePacks } from "./module/module-registration.mjs";
 import { default as registry } from "./module/registry.mjs";
 import * as utils from "./module/utils.mjs";
-
+import TooltipsNaheulbeuk from "./module/tooltips.mjs";
+import DragDropNaheulbeuk from "./module/drag-drop.mjs";
 
 
 import { NaheulbeukActor } from "./module/documents/actor.mjs";
@@ -62,13 +64,43 @@ globalThis.naheulbeuk = {
 /*  Foundry VTT Initialization                  */
 /* -------------------------------------------- */
 
-
 Hooks.once("init", function() {
   globalThis.naheulbeuk = game.naheulbeuk = Object.assign(game.system, globalThis.naheulbeuk);
   utils.log(`Initializing the Naheulbeuk Game System - Version ${naheulbeuk.version}\n${NAHEULBEUK.ASCII}`);
 
   // Add custom constants for configuration.
   CONFIG.NAHEULBEUK = NAHEULBEUK;
+  CONFIG.ActiveEffect.documentClass = documents.ActiveEffectNaheulbeuk;
+  CONFIG.ActiveEffect.legacyTransferral = false;
+  CONFIG.Actor.collection = dataModels.collection.ActorsNaheulbeuk;
+  CONFIG.Actor.documentClass = documents.ActorNaheulbeuk;
+  CONFIG.Adventure.documentClass = documents.AdventureNaheulbeuk;
+  CONFIG.Canvas.layers.tokens.layerClass = CONFIG.Token.layerClass = canvas.layers.TokenLayerNaheulbeuk;
+  CONFIG.ChatMessage.documentClass = documents.ChatMessageNaheulbeuk;
+  CONFIG.Combat.documentClass = documents.CombatNaheulbeuk;
+  CONFIG.Combatant.documentClass = documents.CombatantNaheulbeuk;
+  CONFIG.CombatantGroup.documentClass = documents.CombatantGroupNaheulbeuk;
+  CONFIG.Item.collection = dataModels.collection.ItemsNaheulbeuk;
+  CONFIG.Item.compendiumIndexFields.push("system.container", "system.identifier");
+  CONFIG.Item.documentClass = documents.ItemNaheulbeuk;
+  CONFIG.JournalEntryPage.documentClass = documents.JournalEntryPageNaheulbeuk;
+  CONFIG.Token.documentClass = documents.TokenDocumentNaheulbeuk;
+  CONFIG.Token.objectClass = canvas.TokenNaheulbeuk;
+  CONFIG.Token.rulerClass = canvas.TokenRulerNaheulbeuk;
+  CONFIG.Token.movement.TerrainData = dataModels.TerrainDataNaheulbeuk;
+  CONFIG.User.documentClass = documents.UserNaheulbeuk;
+  CONFIG.time.roundTime = 6;
+  Roll.TOOLTIP_TEMPLATE = "systems/naheulbeuk/templates/chat/roll-breakdown.hbs";
+  CONFIG.Dice.BasicRoll = dice.BasicRoll;
+  CONFIG.Dice.DamageRoll = dice.DamageRoll;
+  CONFIG.Dice.D20Die = dice.D20Die;
+  CONFIG.Dice.D20Roll = dice.D20Roll;
+  CONFIG.MeasuredTemplate.defaults.angle = 53.13; // Naheulbeuk cone RAW should be 53.13 degrees
+  CONFIG.Note.objectClass = canvas.NoteNaheulbeuk;
+  CONFIG.ui.chat = applications.ChatLogNaheulbeuk;
+  CONFIG.ui.combat = applications.combat.CombatTrackerNaheulbeuk;
+  CONFIG.ui.items = applications.item.ItemDirectoryNaheulbeuk;
+  CONFIG.ux.DragDrop = DragDropNaheulbeuk;
 
   game.naheulbeuk = {
     NaheulbeukActor,
@@ -94,24 +126,68 @@ Hooks.once("init", function() {
   registerSystemSettings();
   registerSystemKeybindings();
 
+  // Configure module art
+  game.naheulbeuk.moduleArt = new ModuleArt();
+
+  // Configure bastions
+  game.naheulbeuk.bastion = new documents.Bastion();
+
+  // Configure tooltips
+  game.naheulbeuk.tooltips = new TooltipsNaheulbeuk();
+
+  // Register module data from manifests
+  registerModuleData();
+  registerModuleRedirects();
+
+  // Register Roll Extensions
+  CONFIG.Dice.rolls = [dice.BasicRoll, dice.D20Roll, dice.DamageRoll];
+
+  // Hook up system data types
+  CONFIG.ActiveEffect.dataModels = dataModels.activeEffect.config;
+  CONFIG.Actor.dataModels = dataModels.actor.config;
+  CONFIG.ChatMessage.dataModels = dataModels.chatMessage.config;
+  CONFIG.Item.dataModels = dataModels.item.config;
+  CONFIG.JournalEntryPage.dataModels = dataModels.journal.config;
+  Object.assign(CONFIG.RegionBehavior.dataModels, dataModels.regionBehavior.config);
+  Object.assign(CONFIG.RegionBehavior.typeIcons, dataModels.regionBehavior.icons);
+
+  // Add fonts
+  _configureFonts();
+
   // Register sheet application classes
   Actors.unregisterSheet("core", ActorSheet);
-  Actors.registerSheet("naheulbeuk", NaheulbeukActorSheet, { makeDefault: true });
   Items.unregisterSheet("core", ItemSheet);
   Items.registerSheet("naheulbeuk", NaheulbeukItemSheet, { makeDefault: true });
 
   // Register sheet application classes
   const DocumentSheetConfig = foundry.applications.apps.DocumentSheetConfig;
   DocumentSheetConfig.unregisterSheet(Actor, "core", foundry.appv1.sheets.ActorSheet);
-  DocumentSheetConfig.registerSheet(Actor, "naheulbeuk", applications.actor.CharacterActorSheet, {
+  Actors.registerSheet("naheulbeuk", NaheulbeukActorSheet, { makeDefault: true });
+  DocumentSheetConfig.registerSheet(Actor, "NAHEULBEUK", applications.actor.CharacterActorSheet, {
     types: ["character"],
     makeDefault: true,
     label: "NAHEULBEUK.SheetClass.Character"
   });
 
+  CONFIG.Token.prototypeSheetClass = applications.PrototypeTokenConfigNaheulbeuk;
+  DocumentSheetConfig.unregisterSheet(TokenDocument, "core", foundry.applications.sheets.TokenConfig);
+  DocumentSheetConfig.registerSheet(TokenDocument, "NAHEULBEUK", applications.TokenConfigNaheulbeuk, {
+    label: "NAHEULBEUK.SheetClass.Token"
+  });
+
   // Preload Handlebars helpers & partials
   utils.registerHandlebarsHelpers();
   utils.preloadHandlebarsTemplates();
+
+  // Enrichers
+  enrichers.registerCustomEnrichers();
+
+  // Exhaustion handling
+  documents.ActiveEffectNaheulbeuk.registerHUDListeners();
+
+  // Set up token movement actions
+  documents.TokenDocumentNaheulbeuk.registerMovementActions();
+
   
   Hooks.on("hotbarDrop", (bar, data, slot) => {
     if (["Item"].includes(data.type)) {
@@ -120,22 +196,264 @@ Hooks.once("init", function() {
     }
   })
 
-  // Register Handlebars Helpers
-  registerHandlebarsHelpers();
+  // Preload Handlebars helpers & partials
+  utils.registerHandlebarsHelpers();
+  utils.preloadHandlebarsTemplates();
 
-  // Preload Handlebars templates.
-  return preloadHandlebarsTemplates();
+  utils.log(`Initializing the Naheulbeuk Game System - Finished`);
 });
 
-//Hook ready utilisé pour faire des patchs suite à des MAJ qui cassent le système
-Hooks.once('ready', async function () {
+/* -------------------------------------------- */
+
+/**
+ * Configure explicit lists of attributes that are trackable on the token HUD and in the combat tracker.
+ * @internal
+ */
+function _configureTrackableAttributes() {
+  const common = {
+    bar: [],
+    value: [
+      ...Object.keys(NAHEULBEUK.abilities).map(ability => `abilities.${ability}.value`),
+      ...Object.keys(NAHEULBEUK.movementTypes).map(movement => `attributes.movement.${movement}`),
+      "attributes.ac.value", "attributes.init.total"
+    ]
+  };
+
+  const creature = {
+    bar: [
+      ...common.bar,
+      "attributes.hp",
+      ..._trackedSpellAttributes()
+    ],
+    value: [
+      ...common.value,
+      ...Object.keys(NAHEULBEUK.skills).map(skill => `skills.${skill}.passive`),
+      ...Object.keys(NAHEULBEUK.senses).map(sense => `attributes.senses.${sense}`),
+      "attributes.hp.temp", "attributes.spell.attack", "attributes.spell.dc"
+    ]
+  };
+
+  CONFIG.Actor.trackableAttributes = {
+    character: {
+      bar: [...creature.bar, "resources.primary", "resources.secondary", "resources.tertiary", "details.xp"],
+      value: [...creature.value]
+    },
+    npc: {
+      bar: [...creature.bar, "resources.legact", "resources.legres"],
+      value: [...creature.value, "attributes.spell.level", "details.cr", "details.xp.value"]
+    },
+    vehicle: {
+      bar: [...common.bar, "attributes.hp"],
+      value: [...common.value]
+    },
+    group: {
+      bar: [],
+      value: []
+    }
+  };
+}
+
+/* -------------------------------------------- */
+
+/**
+ * Get all trackable spell slot attributes.
+ * @param {string} [suffix=""]  Suffix appended to the path.
+ * @returns {Set<string>}
+ * @internal
+ */
+function _trackedSpellAttributes(suffix="") {
+  return Object.entries(NAHEULBEUK.spellcasting).reduce((acc, [k, v]) => {
+    if ( v.slots ) Array.fromRange(Object.keys(NAHEULBEUK.spellLevels).length - 1, 1).forEach(l => {
+      acc.add(`spells.${v.getSpellSlotKey(l)}${suffix}`);
+    });
+    return acc;
+  }, new Set());
+}
+
+/* -------------------------------------------- */
+
+/**
+ * Configure which attributes are available for item consumption.
+ * @internal
+ */
+function _configureConsumableAttributes() {
+  CONFIG.NAHEULBEUK.consumableResources = [
+    ...Object.keys(NAHEULBEUK.abilities).map(ability => `abilities.${ability}.value`),
+    "attributes.ac.flat",
+    "attributes.hp.value",
+    "attributes.exhaustion",
+    ...Object.keys(NAHEULBEUK.senses).map(sense => `attributes.senses.${sense}`),
+    ...Object.keys(NAHEULBEUK.movementTypes).map(type => `attributes.movement.${type}`),
+    ...Object.keys(NAHEULBEUK.currencies).map(denom => `currency.${denom}`),
+    "details.xp.value",
+    "resources.primary.value", "resources.secondary.value", "resources.tertiary.value",
+    "resources.legact.value", "resources.legres.value", "attributes.actions.value",
+    ..._trackedSpellAttributes(".value")
+  ];
+}
+
+/* -------------------------------------------- */
+
+/**
+ * Configure additional system fonts.
+ */
+function _configureFonts() {
+  Object.assign(CONFIG.fontDefinitions, {
+
+  });
+}
+
+/* -------------------------------------------- */
+
+/**
+ * Configure system status effects.
+ */
+function _configureStatusEffects() {
+  const addEffect = (effects, {special, ...data}) => {
+    data = foundry.utils.deepClone(data);
+    data._id = utils.staticID(`naheulbeuk${data.id}`);
+    data.order ??= Infinity;
+    effects.push(data);
+    if ( special ) CONFIG.specialStatusEffects[special] = data.id;
+    if ( data.neverBlockMovement ) NAHEULBEUK.neverBlockStatuses.add(data.id);
+  };
+  CONFIG.statusEffects = Object.entries(CONFIG.NAHEULBEUK.statusEffects).reduce((arr, [id, data]) => {
+    const original = CONFIG.statusEffects.find(s => s.id === id);
+    addEffect(arr, foundry.utils.mergeObject(original ?? {}, { id, ...data }, { inplace: false }));
+    return arr;
+  }, []);
+  for ( const [id, data] of Object.entries(CONFIG.NAHEULBEUK.conditionTypes) ) {
+    addEffect(CONFIG.statusEffects, { id, ...data });
+  }
+  for ( const [id, data] of Object.entries(CONFIG.NAHEULBEUK.encumbrance.effects) ) {
+    addEffect(CONFIG.statusEffects, { id, ...data, hud: false });
+  }
+}
+
+/* -------------------------------------------- */
+/*  Foundry VTT Setup                           */
+/* -------------------------------------------- */
+
+/**
+ * Prepare attribute lists.
+ */
+Hooks.once("setup", function() {
+  utils.log(`Setting up Naheulbeuk Game System...`);
+  // Configure trackable & consumable attributes.
+  _configureTrackableAttributes();
+  _configureConsumableAttributes();
+
+  CONFIG.NAHEULBEUK.trackableAttributes = expandAttributeList(CONFIG.NAHEULBEUK.trackableAttributes);
+  game.naheulbeuk.moduleArt.registerModuleArt();
+  TooltipsNaheulbeuk.activateListeners();
+  game.naheulbeuk.tooltips.observe();
+
+  // Set up compendiums with custom applications & sorting
+  setupModulePacks();
+
+  // Create CSS for currencies
+  const style = document.createElement("style");
+  const currencies = append => Object.entries(CONFIG.NAHEULBEUK.currencies)
+    .map(([key, { icon }]) => `&.${key}${append ?? ""} { background-image: url("${icon}"); }`);
+  style.innerHTML = `
+    :is(.naheulbeuk, .naheulbeuk-journal) :is(i, span).currency {
+      ${currencies().join("\n")}
+    }
+    .naheulbeuk .form-group label.label-icon.currency {
+      ${currencies("::after").join("\n")}
+    }
+  `;
+  document.head.append(style);
+
+  utils.log(`Setting up Naheulbeuk Game System - Finished`);
+});
+
+/* --------------------------------------------- */
+
+/**
+ * Expand a list of attribute paths into an object that can be traversed.
+ * @param {string[]} attributes  The initial attributes configuration.
+ * @returns {object}  The expanded object structure.
+ */
+function expandAttributeList(attributes) {
+  return attributes.reduce((obj, attr) => {
+    foundry.utils.setProperty(obj, attr, true);
+    return obj;
+  }, {});
+}
+
+/* --------------------------------------------- */
+
+/**
+ * Perform one-time pre-localization and sorting of some configuration objects
+ */
+Hooks.once("i18nInit", () => {
+  utils.log(`i18n Initialisation Naheulbeuk Game System...`);
+  // Set up status effects. Explicitly performed after init and before prelocalization.
+  _configureStatusEffects();
+
+  utils.performPreLocalization(CONFIG.NAHEULBEUK);
+  Object.values(CONFIG.NAHEULBEUK.activityTypes).forEach(c => c.documentClass.localize());
+
+  // Spellcasting
+  dataModels.spellcasting.SpellcastingModel.fromConfig();
+
+  utils.log(`i18n Initialisation Naheulbeuk Game System - Finished`);
+});
+
+/* -------------------------------------------- */
+/*  Foundry VTT Ready                           */
+/* -------------------------------------------- */
+
+/**
+ * Once the entire VTT framework is initialized, check to see if we should perform a data migration
+ */
+Hooks.once("ready", function() {
+  utils.log(`Ready Naheulbeuk Game System...`);
+
+  // Wait to register hotbar drop hook on ready so that modules could register earlier if they want to
+  Hooks.on("hotbarDrop", (bar, data, slot) => {
+    if ( ["ActiveEffect", "Activity", "Item"].includes(data.type) ) {
+      documents.macro.createNaheulbeukMacro(data, slot);
+      return false;
+    }
+  });
+
+  // Adjust sourced items on actors now that compendium UUID redirects have been initialized
+  game.actors.forEach(a => a.sourcedItems._redirectKeys());
+
+  // Register items by type
+  naheulbeuk.registry.classes.initialize();
+
+  // Chat message listeners
+  documents.ChatMessageNaheulbeuk.activateListeners();
+
+  // Determine whether a system migration is required and feasible
+  if ( !game.user.isGM ) return;
+
+  const cv = game.settings.get("naheulbeuk", "systemMigrationVersion") || game.world.flags.naheulbeuk?.version;
+  const totalDocuments = game.actors.size + game.scenes.size + game.items.size;
+  if ( !cv && totalDocuments === 0 ) return game.settings.set("naheulbeuk", "systemMigrationVersion", game.system.version);
+  if ( cv && !foundry.utils.isNewerVersion(game.system.flags.needsMigrationVersion, cv) ) return;
+
+  // Compendium pack folder migration.
+  if ( foundry.utils.isNewerVersion("3.0.0", cv) ) {
+  }
+
+  // Perform the migration
+  if ( cv && foundry.utils.isNewerVersion(game.system.flags.compatibleMigrationVersion, cv) ) {
+    ui.notifications.error("MIGRATION.NaheulbeukVersionTooOldWarning", {localize: true, permanent: true});
+  }
+  migrations.migrateWorld();
+
+
   //Gestion message de bienvenue + compteur sur nouvelle version
   //Creation du setting si non existant
   try {
-    await game.settings.register("core", "naheulbeuk.version", { scope: 'world', type: String })
+    game.settings.register("core", "naheulbeuk.version", { scope: 'world', type: String })
   } catch (e) {
-    await game.settings.register("core", "naheulbeuk.version", { scope: 'world', type: String })
-    await game.settings.set("core", "naheulbeuk.version", "10.1.5")
+    game.settings.register("core", "naheulbeuk.version", { scope: 'world', type: String })
+    game.settings.set("core", "naheulbeuk.version", "10.1.5")
   }
   //Comparaison du setting avec la version actuelle et sinon on affiche un message et on comptabilise puis maj setting
   if (game.system.version != game.settings.get("core", "naheulbeuk.version")) {
@@ -181,9 +499,38 @@ Vous pouvez également rejoindre la communauté <strong>Naheulbeuk</strong> sur 
     //FIN -- Patch nouveau system d'initiative
     
     //--------Maj setting
-    await game.settings.set("core", "naheulbeuk.version", game.system.version)
+    game.settings.set("core", "naheulbeuk.version", game.system.version)
   }
+
+
+  utils.log(`Ready Naheulbeuk Game System - Finished`);
 });
+
+
+/* -------------------------------------------- */
+/*  System Styling                              */
+/* -------------------------------------------- */
+
+Hooks.on("renderGamePause", (app, html) => {
+  if ( Hooks.events.renderGamePause.length > 1 ) return;
+  html.classList.add("naheulbeuk");
+  const container = document.createElement("div");
+  container.classList.add("flexcol");
+  container.append(...html.children);
+  html.append(container);
+  const img = html.querySelector("img");
+  img.src = "systems/naheulbeuk/ui/official/ampersand.svg";
+  img.className = "";
+});
+
+Hooks.on("renderSettings", (app, html) => applications.settings.sidebar.renderSettings(html));
+
+/* -------------------------------------------- */
+/*  Other Hooks                                 */
+/* -------------------------------------------- */
+
+
+
 
 /**
  * Create a Macro from an Item drop.
@@ -850,3 +1197,21 @@ function callbackAttaqueRapide(actor,item) {
   },{width: 500});
   d.render(true);
 }
+
+/* -------------------------------------------- */
+/*  Bundled Module Exports                      */
+/* -------------------------------------------- */
+
+export {
+  applications,
+  canvas,
+  dataModels,
+  dice,
+  documents,
+  enrichers,
+  Filter,
+  migrations,
+  registry,
+  utils,
+  NAHEULBEUK
+};
