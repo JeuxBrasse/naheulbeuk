@@ -1,31 +1,74 @@
-// Import document classes.
-import { NaheulbeukActor } from "./documents/actor.mjs";
-import { NaheulbeukItem } from "./documents/item.mjs";
+/**
+ * The Naheulbeuk game system for Foundry Virtual Tabletop
+ * A system for playing the fifth edition of the world's most popular role-playing game.
+ * Repository: https://github.com/JeuxBrasse/naheulbeuk
+ * Issue Tracker: https://github.com/JeuxBrasse/naheulbeuk/issues
+ */
+
+// Import Configuration
+// 
+import { NAHEULBEUK } from "./module/config.mjs";
+import {
+  registerSystemKeybindings, registerSystemSettings
+} from "./module/settings.mjs";
+
+// Import Submodules
+import * as applications from "./module/applications/_module.mjs";
+import * as canvas from "./module/canvas/_module.mjs";
+import * as dataModels from "./module/data/_module.mjs";
+import * as dice from "./module/dice/_module.mjs";
+import * as documents from "./module/documents/_module.mjs";
+import * as enrichers from "./module/enrichers.mjs";
+import * as Filter from "./module/filter.mjs";
+import * as migrations from "./module/migration.mjs";
+import { registerModuleData, registerModuleRedirects, setupModulePacks } from "./module/module-registration.mjs";
+import { default as registry } from "./module/registry.mjs";
+import * as utils from "./module/utils.mjs";
+
+
+
+import { NaheulbeukActor } from "./module/documents/actor.mjs";
+import { NaheulbeukItem } from "./module/documents/item.mjs";
 // Import sheet classes.
-import { NaheulbeukActorSheet } from "./sheets/actor-sheet.mjs";
-import { NaheulbeukItemSheet } from "./sheets/item-sheet.mjs";
+import { NaheulbeukActorSheet } from "./module/sheets/actor-sheet.mjs";
+import { NaheulbeukItemSheet } from "./module/sheets/item-sheet.mjs";
 // Import helper/utility classes and constants.
-import { preloadHandlebarsTemplates } from "./helpers/templates.mjs";
-import { NAHEULBEUK } from "./helpers/config.mjs";
+import { preloadHandlebarsTemplates } from "./module/helpers/templates.mjs";
 
 //PCH
-import { Macros } from "./documents/macro.mjs";
-import { registerHandlebarsHelpers } from './documents/helpers.mjs';
+import { Macros } from "./module/documents/macro.mjs";
+import { registerHandlebarsHelpers } from './module/documents/helpers.mjs';
 
 
 /* -------------------------------------------- */
-/*  Init Hook                                   */
+/*  Define Module Structure                     */
+/* -------------------------------------------- */
+globalThis.naheulbeuk = {
+  applications,
+  canvas,
+  config: NAHEULBEUK,
+  dataModels,
+  dice,
+  documents,
+  enrichers,
+  Filter,
+  migrations,
+  registry,
+  ui: {},
+  utils
+};
+
+/* -------------------------------------------- */
+/*  Foundry VTT Initialization                  */
 /* -------------------------------------------- */
 
-/* -------------------------------------------- */
-/*  Ready Hook                                  */
-/* -------------------------------------------- */
 
+Hooks.once("init", function() {
+  globalThis.naheulbeuk = game.naheulbeuk = Object.assign(game.system, globalThis.naheulbeuk);
+  utils.log(`Initializing the Naheulbeuk Game System - Version ${naheulbeuk.version}\n${NAHEULBEUK.ASCII}`);
 
-Hooks.once('init', async function () {
-
-  // Add utility classes to the global game object so that they're more easily
-  // accessible in global contexts.
+  // Add custom constants for configuration.
+  CONFIG.NAHEULBEUK = NAHEULBEUK;
 
   game.naheulbeuk = {
     NaheulbeukActor,
@@ -33,10 +76,6 @@ Hooks.once('init', async function () {
     rollItemMacro,
     macros: Macros
   };
-
-  // Add custom constants for configuration.
-  CONFIG.NAHEULBEUK = NAHEULBEUK;
-
   /**
    * Set an initiative formula for the system
    * @type {String}
@@ -51,12 +90,29 @@ Hooks.once('init', async function () {
   CONFIG.Actor.documentClass = NaheulbeukActor;
   CONFIG.Item.documentClass = NaheulbeukItem;
 
+  // Register System Settings
+  registerSystemSettings();
+  registerSystemKeybindings();
+
   // Register sheet application classes
   Actors.unregisterSheet("core", ActorSheet);
   Actors.registerSheet("naheulbeuk", NaheulbeukActorSheet, { makeDefault: true });
   Items.unregisterSheet("core", ItemSheet);
   Items.registerSheet("naheulbeuk", NaheulbeukItemSheet, { makeDefault: true });
 
+  // Register sheet application classes
+  const DocumentSheetConfig = foundry.applications.apps.DocumentSheetConfig;
+  DocumentSheetConfig.unregisterSheet(Actor, "core", foundry.appv1.sheets.ActorSheet);
+  DocumentSheetConfig.registerSheet(Actor, "naheulbeuk", applications.actor.CharacterActorSheet, {
+    types: ["character"],
+    makeDefault: true,
+    label: "NAHEULBEUK.SheetClass.Character"
+  });
+
+  // Preload Handlebars helpers & partials
+  utils.registerHandlebarsHelpers();
+  utils.preloadHandlebarsTemplates();
+  
   Hooks.on("hotbarDrop", (bar, data, slot) => {
     if (["Item"].includes(data.type)) {
       Macros.createMacro(data, slot);

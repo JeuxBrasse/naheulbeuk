@@ -2,18 +2,33 @@
   "id": "naheulbeuk",
   "title": "Naheulbeuk",
   "description": "The Naheulbeuk system for FoundryVTT!",
-  "version": "10.1.5",
+  "version": "13.0.0",
   "compatibility": {
-    "minimum": "11",
-    "verified": "11.315"
+    "minimum": "13",
+    "verified": "13.351"
   },
-  "authors": [{"name": "Dipes"}],
+  "url": "https://github.com/JeuxBrasse/naheulbeuk",
+  "manifest": "https://github.com/Dipess/JeuxBrasse/naheulbeuk/master/system.json",
+  "download": "https://github.com/Dipess/JeuxBrasse/releases/naheulbeuk/download/10.1.5/system.zip",
+  "authors": [
+    {
+      "name": "BenKnock",
+      "url": "https://foundryvtt.com",
+      "flags": {}
+    }
+  ],
   "esmodules": [
-    "module/naheulbeuk.mjs"
+    "naheulbeuk.mjs"
   ],
   "styles": [
     "css/naheulbeuk.css"
   ],
+  "documentTypes": {
+     "Actor": {},
+     "Item": {},
+     "JournalEntryPage": {}
+  },
+
   "scripts": [],
   "packs": [
     {
@@ -581,15 +596,46 @@
     {
       "lang": "en",
       "name": "English",
-      "path": "lang/en.json"
+      "path": "lang/en.json",
+      "flags": {}
+    },
+    {
+      "lang": "fr",
+      "name": "French",
+      "path": "lang/fr.json",
+      "flags": {}
     }
   ],
-  "gridDistance": 1,
-  "gridUnits": "m",
-  "primaryTokenAttribute": "health",
-  "secondaryTokenAttribute": "power",
-  "url": "https://github.com/Dipess/naheulbeuk",
-  "manifest": "https://github.com/Dipess/naheulbeuk/releases/latest/download/system.json",
-  "download": "https://github.com/Dipess/naheulbeuk/releases/download/10.1.5/system.zip",
-  "license": "LICENSE.txt"
+  "media": [
+    {
+      "type": "cover",
+      "loop": false,
+      "flags": {}
+    },
+    {
+      "type": "setup",
+      "url": "systems/naheulbeuk/ui/official/naheulbeuk-repo.jpg",
+      "thumbnail": "systems/naheulbeuk/ui/official/naheulbeuk-thumbnail.jpg"
+    }
+  ],
+  "socket": true,
+  "grid": {
+    "distance": 1,
+    "units": "m"
+  },
+  "primaryTokenAttribute": "attributes.hp",
+  "background": "systems/naheulbeuk/ui/official/naheulbeuk-background.webp",
+  "flags": {
+    "naheulbeuk": {
+      "sourceBooks": {
+        "SRD 1.0": "SOURCE.BOOK.SRD1"
+      }
+    },
+    "needsMigrationVersion": "",
+    "compatibleMigrationVersion": "",
+    "hotReload": {
+      "extensions": ["css", "hbs", "json"],
+      "paths": ["naheulbeuk.css", "templates", "lang"]
+    }
+  }
 }
