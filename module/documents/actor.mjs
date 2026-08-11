@@ -10,7 +10,7 @@ export class NaheulbeukActor extends Actor {
     // the following, in order: data reset (to clear active effects),
     // prepareBaseData(), prepareEmbeddedDocuments() (including active effects),
     // prepareDerivedData().
-    super.prepareData();
+    super.prepareBaseData();
   }
 
   /** @override */

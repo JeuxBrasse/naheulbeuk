@@ -1,0 +1,25 @@
+# Build Artifacts
+naheulbeuk.css
+naheulbeuk.css.map
+naheulbeuk-compiled*
+naheulbeuk.lock
+packs/*
+!packs/_source/
+dist/
+utils/
+foundry/
+
+# IDE
+.idea/
+.nova/
+.vs/
+.vscode/
+*.code-workspace
+*.iml
+*.swp
+
+# Node Modules
+node_modules/
+
+# OS Specific
+.DS_Store

@@ -1,15 +1,16 @@
 import { onManageActiveEffect, prepareActiveEffectCategories } from "../helpers/effects.mjs";
 
+const TextEditor = foundry.applications.ux.TextEditor.implementation;
 /**
  * Extend the basic ActorSheet with some very simple modifications
  * @extends {ActorSheet}
  */
 
-export class NaheulbeukActorSheet extends ActorSheet {
+export class NaheulbeukActorSheet extends foundry.appv1.sheets.ActorSheet {
 
   /** @override */
   static get defaultOptions() {
-    return mergeObject(super.defaultOptions, {
+    return foundry.utils.mergeObject(super.defaultOptions, {
       classes: ["naheulbeuk", "sheet", "actor"],
       template: "systems/naheulbeuk/templates/actor/actor-sheet.html",
       width: 750,
@@ -489,7 +490,7 @@ export class NaheulbeukActorSheet extends ActorSheet {
     //Permet d'éviter le drag and drop des attaques de PNJ
     html.find('.item-combat').click(ev => {
       const li = $(ev.currentTarget).parents(".item");
-      const item = this.actor.items.get(li.data("itemId"));    
+      const item = this.actor.items.get(li.data("itemId"));
       let mode = 1
       try {
         game.settings.register("core", "naheulbeuk.mode_drag", { scope: 'world', type: String })
@@ -544,7 +545,7 @@ export class NaheulbeukActorSheet extends ActorSheet {
       const item = this.actor.items.get(li.data("itemId"));
       item.update({"system.stockage":"bourse"})
     });
-    
+
     // Active Effect management --> non utilisé mais gardé au cas ou
     html.find(".effect-control").click(ev => onManageActiveEffect(ev, this.actor));
 
@@ -652,7 +653,7 @@ export class NaheulbeukActorSheet extends ActorSheet {
         await item.update({"system.stockage":"sac"})
       }
     }
-    
+
     //Initialisation de la variable permettant de savoir si on peut équiper l'objet
     let flag_equipement_possible = true
 
@@ -660,7 +661,7 @@ export class NaheulbeukActorSheet extends ActorSheet {
     if (ev.shiftKey) {
     } else {
       if (item.system.equipe==false) {
-        //Test des objets de type "bouclier" équipés 
+        //Test des objets de type "bouclier" équipés
         var prbouclier = 0;
         this.actor.items._source.forEach(element => {
           if (element.type == "arme" && element.system.equipe) {
@@ -682,7 +683,7 @@ export class NaheulbeukActorSheet extends ActorSheet {
       }
     }
 
-    //Gestion des objets de type "arme" 
+    //Gestion des objets de type "arme"
     //on compte ce qui est actuellement équipé
     if (item.system.equipe == false && item.type == "arme" && actor.type == "character") {
       //On regarde ce qui est équipé
@@ -747,7 +748,7 @@ export class NaheulbeukActorSheet extends ActorSheet {
 
     //MAJ Affichage des états
     await this._affichage_etat(actor)
-    
+
   }
 
   //Diminue la quantité d'un objet
@@ -1273,13 +1274,13 @@ export class NaheulbeukActorSheet extends ActorSheet {
               UpdatedData.system.attributes.att_arme_jet.degat = UpdatedData.system.attributes.att_arme_jet.degat + "+" + item.system.degat_arme_jet
             }
           }
-          
+
           //Maj Mvt
           if (item.system.mvt != undefined && item.system.mvt != "-") {
             UpdatedData.system.attributes.mvt.value = UpdatedData.system.attributes.mvt.value + parseInt(item.system.mvt)
           }
 
-        }      
+        }
 
         //Maj PR bonus
         if (item.system.pr != undefined && item.system.pr != "-") {
@@ -1308,7 +1309,7 @@ export class NaheulbeukActorSheet extends ActorSheet {
         if (item.system.mpsy != undefined && item.system.mpsy != "-") {
           UpdatedData.system.attributes.mpsy.bonus = UpdatedData.system.attributes.mpsy.bonus + parseInt(item.system.mpsy)
         }
-        
+
         //Maj esquive bonus
         if (item.system.esq != undefined && item.system.esq != "-") {
           UpdatedData.system.attributes.esq.bonus = UpdatedData.system.attributes.esq.bonus + parseInt(item.system.esq)
@@ -1527,14 +1528,14 @@ export class NaheulbeukActorSheet extends ActorSheet {
   //Update Effets liés aux états
   async _affichage_etat(actor) {
     let item
-    let effect 
+    let effect
     for (item of actor.items) { //Pour tous les objets
       if (item.type=="etat"){ //si c'est un état
         let action=""
         if (item.system.affichage==false || item.system.equipe==false) {action="desactive"} else {action="active"}
         let effectS
         for (effect of actor.effects) {
-          if (effect.label==item.id){ 
+          if (effect.label==item.id){
             effectS=effect
           }
         }

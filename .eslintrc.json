@@ -1,0 +1,28 @@
+{
+    "env": {
+        "browser": true,
+        "es2021": true,
+        "node": true,
+        "jquery": true
+    },
+    "parser": "@babel/eslint-parser",
+    "parserOptions": {
+        "requireConfigFile": false,
+        "sourceType": "module"
+    },
+    "plugins": [
+        "jsdoc"
+    ],
+    "settings": {
+        "jsdoc": {
+            "mode": "typescript",
+            "preferredTypes": {
+                ".<>": "<>",
+                "Object": "object"
+            },
+            "tagNamePreference": {
+                "auguments": "extends"
+            }
+        }
+    }
+}

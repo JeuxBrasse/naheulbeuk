@@ -1,12 +1,14 @@
+const TextEditor = foundry.applications.ux.TextEditor.implementation;
+
 /**
  * Extend the basic ItemSheet with some very simple modifications
  * @extends {ItemSheet}
  */
-export class NaheulbeukItemSheet extends ItemSheet {
+export class NaheulbeukItemSheet extends foundry.appv1.sheets.ItemSheet {
 
   /** @override */
   static get defaultOptions() {
-    return mergeObject(super.defaultOptions, {
+    return foundry.utils.mergeObject(super.defaultOptions, {
       classes: ["naheulbeuk", "sheet", "item"],
       width: 600,
       height: 650,
@@ -63,7 +65,7 @@ export class NaheulbeukItemSheet extends ItemSheet {
   if (this.object.type=="gemme"){
      this.object.update({"system.weight":parseFloat(this.object.system.ug)*0.008})
   }
-    
+
     return context;
   }
 
@@ -112,7 +114,7 @@ export class NaheulbeukItemSheet extends ItemSheet {
           Item.create(new_Item);
         }
       })
-      
+
     });
 
     // Edition d'un objet de conteneur
@@ -139,7 +141,7 @@ export class NaheulbeukItemSheet extends ItemSheet {
     html.find('.masquerstats').click(ev => {
       if (game.users.current.role==4){
         let nom = this.object.name
-        this.object.update({ 
+        this.object.update({
           "system.cacher": !this.object.system.cacher,
           "name" : this.object.system.nomcacher,
           "system.nomcacher": nom,
@@ -156,7 +158,7 @@ export class NaheulbeukItemSheet extends ItemSheet {
       }
     });
 
-    //Rajout d'un roll 
+    //Rajout d'un roll
     html.find('.rollable2').click(this._onRollCustom.bind(this));
 
     //Afficher ou masquer la catégorie d'une arme/armure
@@ -259,7 +261,7 @@ export class NaheulbeukItemSheet extends ItemSheet {
       }
     }
   }
-  
+
   //Création de la fonction pour le drop d'un objet dans le conteneur
   _onDrop(event) {
     event.preventDefault();
@@ -289,7 +291,7 @@ export class NaheulbeukItemSheet extends ItemSheet {
             ui.notifications.error("L'objet ne doit pas être équipé/activé pour aller dans un conteneur.");
           } else {
             // on sauvegarde l'ID du conteneur dans l'objet contenu
-            let cont_id={} 
+            let cont_id={}
             cont_id._id=this.object._id
             itemData.system.conteneur=cont_id
             //On génère un ID unique
@@ -362,7 +364,7 @@ export class NaheulbeukItemSheet extends ItemSheet {
         for (let actor of game.actors){
           if (actor.items.get(conteneur_data._id)!=undefined){ownerConteneur=actor}
         }
-        let conteneurAupdate 
+        let conteneurAupdate
         if (ownerConteneur.items!=undefined){ //Si le conteneur est bien sur un acteur
           conteneurAupdate = ownerConteneur.items.get(conteneur_data._id) //On récupère l'objet associé
         } else {
