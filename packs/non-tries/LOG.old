@@ -1,3 +1,7 @@
-2026/08/11-00:22:25.834 9650 Recovering log #316
-2026/08/11-00:22:25.837 9650 Delete type=0 #316
-2026/08/11-00:22:25.837 9650 Delete type=3 #315
+2026/08/20-22:00:51.535 8aac Recovering log #334
+2026/08/20-22:00:51.538 8aac Delete type=0 #334
+2026/08/20-22:00:51.538 8aac Delete type=3 #333
+2026/08/20-22:07:38.131 8e4c Level-0 table #338: started
+2026/08/20-22:07:38.131 8e4c Level-0 table #338: 0 bytes OK
+2026/08/20-22:07:38.131 8e4c Delete type=0 #336
+2026/08/20-22:07:38.134 8e4c Manual compaction at level-0 from '!items!00d28cb560344b34' @ 72057594037927935 : 1 .. '!items!ff9597d2d4bf4f24' @ 0 : 0; will stop at (end)

@@ -1,6 +1,6 @@
 export default class ConteneurData extends foundry.abstract.TypeDataModel {
     static defineSchema() {
-        const {SchemaField, StringField, NumberField, BooleanField, HTMLField} = foundry.data.fields;
+        const {DataField, StringField, NumberField, BooleanField, HTMLField} = foundry.data.fields;
         let data = {
             description:new HTMLField({initial:""}),
             img: new StringField({initial: "icons/svg/chest.svg"}),
@@ -16,8 +16,8 @@ export default class ConteneurData extends foundry.abstract.TypeDataModel {
             stockage: new StringField({initial: "sac"}),
             place: new NumberField({initial: 0}),
             poidconteneur: new NumberField({initial: 0}),
-            conteneur: new SchemaField({}),
-            items: new SchemaField({}),
+            conteneur: new DataField(),
+            items: new DataField(),
         }
 		return data;
     }
@@ -38,5 +38,5 @@ export default class ConteneurData extends foundry.abstract.TypeDataModel {
 
     static migrateData(source) {
         return super.migrateData(source);
-    }    
+    }
 }

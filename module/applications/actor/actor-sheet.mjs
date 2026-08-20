@@ -1,4 +1,4 @@
-import { onManageActiveEffect, prepareActiveEffectCategories } from "../helpers/effects.mjs";
+import { onManageActiveEffect, prepareActiveEffectCategories } from "../active-effect/effects.mjs";
 
 const TextEditor = foundry.applications.ux.TextEditor.implementation;
 /**
@@ -6,7 +6,7 @@ const TextEditor = foundry.applications.ux.TextEditor.implementation;
  * @extends {ActorSheet}
  */
 
-export class NaheulbeukActorSheet extends foundry.appv1.sheets.ActorSheet {
+export default class NaheulbeukActorSheet extends foundry.appv1.sheets.ActorSheet {
 
   /** @override */
   static get defaultOptions() {

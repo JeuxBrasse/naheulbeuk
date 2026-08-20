@@ -4,7 +4,7 @@ const TextEditor = foundry.applications.ux.TextEditor.implementation;
  * Extend the basic ItemSheet with some very simple modifications
  * @extends {ItemSheet}
  */
-export class NaheulbeukItemSheet extends foundry.appv1.sheets.ItemSheet {
+export default class NaheulbeukItemSheet extends foundry.appv1.sheets.ItemSheet {
 
   /** @override */
   static get defaultOptions() {
@@ -65,7 +65,7 @@ export class NaheulbeukItemSheet extends foundry.appv1.sheets.ItemSheet {
   if (this.object.type=="gemme"){
      this.object.update({"system.weight":parseFloat(this.object.system.ug)*0.008})
   }
-
+    console.log("context",context)
     return context;
   }
 

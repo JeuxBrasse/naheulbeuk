@@ -7,8 +7,8 @@ import NAHEULBEUK from "./module/config.mjs";
 import { NaheulbeukActor } from "./module/documents/actor.mjs";
 import { NaheulbeukItem } from "./module/documents/item.mjs";
 // Import sheet classes.
-import { NaheulbeukActorSheet } from "./module/sheets/actor-sheet.mjs";
-import { NaheulbeukItemSheet } from "./module/sheets/item-sheet.mjs";
+// import { NaheulbeukActorSheet } from "./module/applications/actor/actor-sheet.mjs";
+// import { NaheulbeukItemSheet } from "./module/applications/item/item-sheet.mjs";
 // Import helper/utility classes and constants.
 import { preloadHandlebarsTemplates } from "./module/helpers/templates.mjs";
 
@@ -17,6 +17,7 @@ import { Macros } from "./module/documents/macro.mjs";
 import { registerHandlebarsHelpers } from './module/documents/helpers.mjs';
 
 // Import Submodules
+import * as applications from "./module/applications/_module.mjs";
 import * as dataModels from "./module/data/_module.mjs";
 import * as utils from "./module/utils.mjs";
 
@@ -28,6 +29,7 @@ import * as utils from "./module/utils.mjs";
 globalThis.naheulbeuk = {
   NaheulbeukActor,
   NaheulbeukItem,
+  applications,
   dataModels,
   rollItemMacro,
   macros: Macros,
@@ -67,9 +69,9 @@ Hooks.once("init", function() {
 
   // Register sheet application classes
   foundry.documents.collections.Actors.unregisterSheet("core", foundry.appv1.sheets.ActorSheet);
-  foundry.documents.collections.Actors.registerSheet("naheulbeuk", NaheulbeukActorSheet, { makeDefault: true });
+  foundry.documents.collections.Actors.registerSheet("naheulbeuk", applications.actor.NaheulbeukActorSheet, { makeDefault: true });
   foundry.documents.collections.Items.unregisterSheet("core", foundry.appv1.sheets.ItemSheet);
-  foundry.documents.collections.Items.registerSheet("naheulbeuk", NaheulbeukItemSheet, { makeDefault: true });
+  foundry.documents.collections.Items.registerSheet("naheulbeuk", applications.item.NaheulbeukItemSheet, { makeDefault: true });
 
   Hooks.on("hotbarDrop", (bar, data, slot) => {
     if (["Item"].includes(data.type)) {
@@ -825,6 +827,7 @@ function callbackAttaqueRapide(actor,item) {
 /*  Bundled Module Exports                      */
 /* -------------------------------------------- */
 export {
+  applications,
   dataModels,
   utils,
   NAHEULBEUK

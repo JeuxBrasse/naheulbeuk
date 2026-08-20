@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "CSS compiler for the Naheulbeuk system",
   "scripts": {
-    "createSymlinks": "node ./tools/create-symlinks.mjs",
+    "createSymlinks": "node ./utils/create-symlinks.mjs",
     "postinstall": "npm run createSymlinks",
     "build": "gulp build",
     "compile": "gulp css",
