@@ -1,7 +1,6 @@
-// TODO : Fix conteneur item
-
 // Import Configuration
 import NAHEULBEUK from "./module/config.mjs";
+import { registerSystemSettings, registerSystemKeybindings } from "./module/settings.mjs";
 
 // Import document classes.
 import { NaheulbeukActor } from "./module/documents/actor.mjs";
@@ -10,11 +9,11 @@ import { NaheulbeukItem } from "./module/documents/item.mjs";
 // import { NaheulbeukActorSheet } from "./module/applications/actor/actor-sheet.mjs";
 // import { NaheulbeukItemSheet } from "./module/applications/item/item-sheet.mjs";
 // Import helper/utility classes and constants.
-import { preloadHandlebarsTemplates } from "./module/helpers/templates.mjs";
+// import { preloadHandlebarsTemplates } from "./module/helpers/templates.mjs"; // Function move into utils.mjs
 
 //PCH
 import { Macros } from "./module/documents/macro.mjs";
-import { registerHandlebarsHelpers } from './module/documents/helpers.mjs';
+// import { registerHandlebarsHelpers } from './module/documents/helpers.mjs'; // Function move into utils.mjs
 
 // Import Submodules
 import * as applications from "./module/applications/_module.mjs";
@@ -62,16 +61,27 @@ Hooks.once("init", function() {
     decimals: 0
   };
 
+  // Register System Settings
+  registerSystemSettings();
+  registerSystemKeybindings();
+
   // Hook up system data types
   CONFIG.Actor.dataModels = dataModels.actor.config;
   CONFIG.Item.dataModels = dataModels.item.config;
 
 
   // Register sheet application classes
-  foundry.documents.collections.Actors.unregisterSheet("core", foundry.appv1.sheets.ActorSheet);
-  foundry.documents.collections.Actors.registerSheet("naheulbeuk", applications.actor.NaheulbeukActorSheet, { makeDefault: true });
-  foundry.documents.collections.Items.unregisterSheet("core", foundry.appv1.sheets.ItemSheet);
-  foundry.documents.collections.Items.registerSheet("naheulbeuk", applications.item.NaheulbeukItemSheet, { makeDefault: true });
+  const DocumentSheetConfig = foundry.applications.apps.DocumentSheetConfig
+  DocumentSheetConfig.unregisterSheet(Actor, "core", foundry.appv1.sheets.ActorSheet);
+  DocumentSheetConfig.registerSheet(Actor, "naheulbeuk", applications.actor.NaheulbeukActorSheet, {
+    makeDefault: true,
+    label: "NAHEULBEUK.SheetClass.ActorLegacy"
+  });
+  DocumentSheetConfig.unregisterSheet(Item, "core", foundry.appv1.sheets.ItemSheet);
+  DocumentSheetConfig.registerSheet(Item, "naheulbeuk", applications.item.NaheulbeukItemSheet, {
+    makeDefault: true,
+    label: "NAHEULBEUK.SheetClass.ItemLegacy"
+  });
 
   Hooks.on("hotbarDrop", (bar, data, slot) => {
     if (["Item"].includes(data.type)) {
@@ -80,11 +90,10 @@ Hooks.once("init", function() {
     }
   })
 
-  // Register Handlebars Helpers
-  registerHandlebarsHelpers();
+  // Preload Handlebars helpers & partials
+  utils.registerHandlebarsHelpers();
+  utils.preloadHandlebarsTemplates();
 
-  // Preload Handlebars templates.
-  return preloadHandlebarsTemplates();
 });
 
 /* -------------------------------------------- */

@@ -285,7 +285,7 @@ export default class NaheulbeukItemSheet extends foundry.appv1.sheets.ItemSheet 
   async _onDropItem(event, data) {
     Item.fromDropData(data).then(item => {
       if (this.object.type=="conteneur"){ //On vérifie qu'on est bien sur un conteur
-        const itemData = duplicate(item); //On sauvegarde les datas de l'objet drop
+        const itemData = foundry.utils.duplicate(item); //On sauvegarde les datas de l'objet drop
         if (itemData.system.stockage!=undefined){ //On vérifie que c'est un objet qu'on peut drag and drop dans un conteneur
           if (item.system.equipe==true){ //on vérifie que l'objet n'est pas équipé
             ui.notifications.error("L'objet ne doit pas être équipé/activé pour aller dans un conteneur.");
@@ -309,7 +309,8 @@ export default class NaheulbeukItemSheet extends foundry.appv1.sheets.ItemSheet 
             //on update la liste d'objet du conteneur
             this.object.update({"system.items":itemsFinal}).then(ev2=>{
               if (data.uuid.substr(0,10)!="Compendium"){
-                item.delete()
+                // TODO : NE supprimer que si lobjet provient d'un acteur ou d'un conteneur.
+                // item.delete()
               }
             })
           }
@@ -404,8 +405,6 @@ export default class NaheulbeukItemSheet extends foundry.appv1.sheets.ItemSheet 
       }
     }
     //fin de la petite modif pour mettre à jour le conteneur
-
-
 
     // Restore flags and optionally close the form
     this._submitting = false;
