@@ -1,41 +1,53 @@
+// Import Configuration
+import NAHEULBEUK from "./helpers/config.mjs";
+
 // Import document classes.
 import { NaheulbeukActor } from "./documents/actor.mjs";
 import { NaheulbeukItem } from "./documents/item.mjs";
 // Import sheet classes.
-import { NaheulbeukActorSheet } from "./sheets/actor-sheet.mjs";
-import { NaheulbeukItemSheet } from "./sheets/item-sheet.mjs";
+// import { NaheulbeukActorSheet } from "./sheets/actor-sheet.mjs"; // move to Applications/_module.mjs
+// import { NaheulbeukItemSheet } from "./sheets/item-sheet.mjs"; // move to Applications/_module.mjs
 // Import helper/utility classes and constants.
-import { preloadHandlebarsTemplates } from "./helpers/templates.mjs";
-import { NAHEULBEUK } from "./helpers/config.mjs";
+// import { preloadHandlebarsTemplates } from "./helpers/templates.mjs"; // Function move into utils.mjs
 
 //PCH
 import { Macros } from "./documents/macro.mjs";
-import { registerHandlebarsHelpers } from './documents/helpers.mjs';
+// import { registerHandlebarsHelpers } from './documents/helpers.mjs'; // Function move into utils.mjs
+
+// Import Submodules
+import * as applications from "./applications/_module.mjs";
+import * as dataModels from "./data/_module.mjs";
+import * as utils from "./utils.mjs";
 
 
 /* -------------------------------------------- */
-/*  Init Hook                                   */
+/*  Define Module Structure                     */
 /* -------------------------------------------- */
 
+globalThis.naheulbeuk = {
+  NaheulbeukActor,
+  NaheulbeukItem,
+  applications,
+  dataModels,
+  rollItemMacro,
+  macros: Macros,
+  utils
+}
+
+
 /* -------------------------------------------- */
-/*  Ready Hook                                  */
+/*  Foundry VTT Initialization                  */
 /* -------------------------------------------- */
 
-
-Hooks.once('init', async function () {
-
-  // Add utility classes to the global game object so that they're more easily
-  // accessible in global contexts.
-
-  game.naheulbeuk = {
-    NaheulbeukActor,
-    NaheulbeukItem,
-    rollItemMacro,
-    macros: Macros
-  };
+Hooks.once("init", function() {
+  globalThis.naheulbeuk = game.naheulbeuk = Object.assign(game.system, globalThis.naheulbeuk);
 
   // Add custom constants for configuration.
   CONFIG.NAHEULBEUK = NAHEULBEUK;
+
+  // Define custom Document classes
+  CONFIG.Actor.documentClass = NaheulbeukActor;
+  CONFIG.Item.documentClass = NaheulbeukItem;
 
   /**
    * Set an initiative formula for the system
@@ -47,15 +59,23 @@ Hooks.once('init', async function () {
     decimals: 0
   };
 
-  // Define custom Document classes
-  CONFIG.Actor.documentClass = NaheulbeukActor;
-  CONFIG.Item.documentClass = NaheulbeukItem;
+  // Hook up system data types
+  CONFIG.Actor.dataModels = dataModels.actor.config;
+  CONFIG.Item.dataModels = dataModels.item.config;
+
 
   // Register sheet application classes
-  Actors.unregisterSheet("core", ActorSheet);
-  Actors.registerSheet("naheulbeuk", NaheulbeukActorSheet, { makeDefault: true });
-  Items.unregisterSheet("core", ItemSheet);
-  Items.registerSheet("naheulbeuk", NaheulbeukItemSheet, { makeDefault: true });
+  const DocumentSheetConfig = foundry.applications.apps.DocumentSheetConfig
+  DocumentSheetConfig.unregisterSheet(Actor, "core", foundry.appv1.sheets.ActorSheet);
+  DocumentSheetConfig.registerSheet(Actor, "naheulbeuk", applications.actor.NaheulbeukActorSheet, {
+    makeDefault: true,
+    label: "NAHEULBEUK.SheetClass.ActorLegacy"
+  });
+  DocumentSheetConfig.unregisterSheet(Item, "core", foundry.appv1.sheets.ItemSheet);
+  DocumentSheetConfig.registerSheet(Item, "naheulbeuk", applications.item.NaheulbeukItemSheet, {
+    makeDefault: true,
+    label: "NAHEULBEUK.SheetClass.ItemLegacy"
+  });
 
   Hooks.on("hotbarDrop", (bar, data, slot) => {
     if (["Item"].includes(data.type)) {
@@ -64,22 +84,24 @@ Hooks.once('init', async function () {
     }
   })
 
-  // Register Handlebars Helpers
-  registerHandlebarsHelpers();
-
-  // Preload Handlebars templates.
-  return preloadHandlebarsTemplates();
+  // Preload Handlebars helpers & partials
+  utils.registerHandlebarsHelpers();
+  utils.preloadHandlebarsTemplates();
 });
 
+/* -------------------------------------------- */
+/*  Foundry VTT Ready                           */
+/* -------------------------------------------- */
+
 //Hook ready utilisé pour faire des patchs suite à des MAJ qui cassent le système
-Hooks.once('ready', async function () {
+Hooks.once("ready", function() {
   //Gestion message de bienvenue + compteur sur nouvelle version
   //Creation du setting si non existant
   try {
-    await game.settings.register("core", "naheulbeuk.version", { scope: 'world', type: String })
+    game.settings.register("core", "naheulbeuk.version", { scope: 'world', type: String })
   } catch (e) {
-    await game.settings.register("core", "naheulbeuk.version", { scope: 'world', type: String })
-    await game.settings.set("core", "naheulbeuk.version", "10.1.5")
+    game.settings.register("core", "naheulbeuk.version", { scope: 'world', type: String })
+    game.settings.set("core", "naheulbeuk.version", "10.1.5")
   }
   //Comparaison du setting avec la version actuelle et sinon on affiche un message et on comptabilise puis maj setting
   if (game.system.version != game.settings.get("core", "naheulbeuk.version")) {
@@ -125,7 +147,7 @@ Vous pouvez également rejoindre la communauté <strong>Naheulbeuk</strong> sur 
     //FIN -- Patch nouveau system d'initiative
     
     //--------Maj setting
-    await game.settings.set("core", "naheulbeuk.version", game.system.version)
+    game.settings.set("core", "naheulbeuk.version", game.system.version)
   }
 });
 
@@ -794,3 +816,21 @@ function callbackAttaqueRapide(actor,item) {
   },{width: 500});
   d.render(true);
 }
+
+/* -------------------------------------------- */
+/*  System Styling                              */
+/* -------------------------------------------- */
+
+/* -------------------------------------------- */
+/*  Other Hooks                                 */
+/* -------------------------------------------- */
+
+/* -------------------------------------------- */
+/*  Bundled Module Exports                      */
+/* -------------------------------------------- */
+export {
+  applications,
+  dataModels,
+  utils,
+  NAHEULBEUK
+ };
