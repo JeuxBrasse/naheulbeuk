@@ -1,0 +1,5 @@
+# Build Artifacts
+packs/*
+foundry/*
+
+# IDE
