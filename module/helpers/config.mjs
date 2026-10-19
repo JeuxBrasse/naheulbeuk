@@ -1,4 +1,4 @@
-export const NAHEULBEUK = {};
+const NAHEULBEUK = {};
 
 /**
  * The set of Ability Scores used within the sytem.
@@ -23,3 +23,5 @@ NAHEULBEUK.abilityAbbreviations = {
   "att": "NAHEULBEUK.AbilityAttAbbr",
   "prd": "NAHEULBEUK.AbilityPrdAbbr"
 };
+
+export default NAHEULBEUK;

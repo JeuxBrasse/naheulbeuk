@@ -1,0 +1,11 @@
+# Build Artifacts
+packs/*
+foundry/*
+
+# IDE
+.idea/
+.vs/
+.vscode/
+
+# Node Modules
+node_modules/
