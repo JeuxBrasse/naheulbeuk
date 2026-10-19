@@ -616,8 +616,8 @@
   },
   "primaryTokenAttribute": "health",
   "secondaryTokenAttribute": "power",
-  "url": "https://github.com/Dipess/naheulbeuk",
-  "manifest": "https://github.com/Dipess/naheulbeuk/releases/latest/download/system.json",
-  "download": "https://github.com/Dipess/naheulbeuk/releases/download/10.1.5/system.zip",
+  "url": "https://github.com/JeuxBrasse/naheulbeuk",
+  "manifest": "https://github.com/JeuxBrasse/naheulbeuk/releases/latest/download/naheulbeuk.json",
+  "download": "https://github.com/JeuxBrasse/naheulbeuk/releases/download/14.0.0/naheulbeuk.zip",
   "license": "LICENSE.txt"
 }
