@@ -3,10 +3,12 @@
   "version": "1.0.0",
   "description": "CSS compiler for the Naheulbeuk system",
   "scripts": {
+    "createSymlinks": "node ./tools/create-symlinks.mjs",
     "build": "gulp build",
     "compile": "gulp css",
     "watch": "gulp",
-    "gulp": "gulp"
+    "gulp": "gulp",
+    "postinstall": "npm run createSymlinks"
   },
   "browserslist": [
     "last 3 versions"
